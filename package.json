@@ -1,0 +1,22 @@
+{
+  "name": "gptrush",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "네이버 블로그 정보성 글 자동 작성 대시보드 - ChatGPT 구독 계정이 품질 기준을 지킨 글과 썸네일을 만들어 네이버 블로그에 임시저장합니다. API 키가 필요 없습니다.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "setup": "node scripts/setup.js",
+    "check": "node scripts/check.js",
+    "check:editor": "node scripts/check-editor.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright": "^1.49.1"
+  }
+}
