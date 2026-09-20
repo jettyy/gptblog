@@ -89,14 +89,37 @@
       </label>
       <button class="btn primary order-go" id="btn-order">확인</button>
     </div>
+    <div class="row bulk-toggle-row">
+      <button class="btn ghost small" id="btn-bulk-toggle">여러 개 한 번에 넣기</button>
+      <span class="hint">큰 주제 목록을 줄바꿈으로 구분해 통째로 붙여넣을 수 있습니다</span>
+    </div>
     <p class="note tight">이 주제와 관련된 <b>최신 정보</b>를 웹에서 찾아, 사람들이 가장 많이
       찾아볼 만한 것으로 글 주제를 알아서 정합니다. 개별 글 제목을 적는 칸이 아닙니다.<br>
       <b>[확인]을 누르면 바로 대기열에 들어가고 입력칸이 비워집니다.</b>
       검색이 도는 동안에도 다음 주제를 계속 넣을 수 있습니다. 넣은 순서대로 처리됩니다.
       (Enter 키로도 됩니다)<br>
-      <b>여러 큰 주제를 한 번에 넣으려면</b> 한 줄에 하나씩 써 둔 목록을 이 칸에
-      그대로 붙여넣으세요. 줄마다 <b>따로따로</b> 대기열에 들어갑니다
-      (지금 개수 칸에 적힌 값을 똑같이 씁니다).</p>
+      <b>여러 큰 주제를 한 번에 넣으려면</b> 위 <b>[여러 개 한 번에 넣기]</b>를 누르세요.
+      한 줄에 하나씩 써 둔 목록을 그대로 붙여넣으면 줄마다 <b>따로따로</b> 대기열에 들어갑니다.
+      (한 줄짜리 칸에 여러 줄을 붙여넣어도 이 칸이 알아서 열립니다)</p>
+
+    <div id="bulk-box" class="hidden">
+      <div class="divider-line"></div>
+      <div class="card-head tight">
+        <h3>큰 주제 여러 개 한 번에 넣기</h3>
+        <span class="hint" id="bulk-count">0개 인식</span>
+      </div>
+      <p class="note tight">한 줄에 <b>큰 주제 하나씩</b> 넣으세요. 줄마다 <b>따로 하나의 주문</b>으로
+        대기열에 들어가고, 개수는 모두 위 <b>[임시저장할 개수]</b> 칸의 값을 씁니다.<br>
+        줄 앞의 번호(<code>1.</code>)나 글머리표(<code>-</code>)는 알아서 떼고,
+        같은 주제가 두 번 있으면 한 번만 넣습니다. 엑셀에서 여러 칸을 복사해 오면 첫 칸만 씁니다.</p>
+      <textarea id="bulk-topics" rows="7" spellcheck="false"
+        placeholder="한 줄에 큰 주제 하나씩.&#10;&#10;예)&#10;2026년 부동산 정책&#10;청년 국가 지원금&#10;전기차 보조금&#10;건강보험 개편"></textarea>
+      <div class="row">
+        <button class="btn primary" id="btn-bulk-add">대기열에 모두 넣기</button>
+        <button class="btn ghost" id="btn-bulk-clear">입력 지우기</button>
+        <button class="btn ghost" id="btn-bulk-close">닫기</button>
+      </div>
+    </div>
 
     <ul class="order-list" id="order-list"></ul>
 

@@ -69,6 +69,8 @@ main {
 
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .row.blog-row { margin-top: 12px; }
+/* 큰 주제 칸 바로 아래 붙는 [여러 개 한 번에 넣기] 줄. */
+.row.bulk-toggle-row { margin: 10px 0 2px; }
 .inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .inline input { width: 220px; }
 .inline.wide-inline { flex: 1; min-width: 280px; }

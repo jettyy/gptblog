@@ -741,10 +741,46 @@ async function queueBigTopic(bigTopic, targetCount) {
  *
  * 응답을 기다리는 동안에도 다음 주제를 이어서 넣을 수 있도록 먼저 비운다.
  */
+/*
+ * 큰 주제는 원래 짧다. "부동산 정책", "전기차 보조금" 처럼 몇 글자다.
+ * 길게 써도 "2026년 상반기 청년 대상 국가 지원금 제도" 정도(25자 안팎)다.
+ * 이 선을 넘으면 여러 주제가 한 줄로 이어붙은 것일 가능성이 높다.
+ *
+ * 너무 높게 잡으면(50자) 다섯 개쯤 이어붙은 진짜 사고를 놓치고,
+ * 너무 낮게 잡으면 멀쩡한 주제마다 물어봐서 귀찮아진다. 40자가 그 사이다.
+ */
+const SUSPICIOUS_TOPIC_CHARS = 40;
+
 async function submitOrder() {
   const input = $('s-big-topic');
   const bigTopic = input.value.trim();
   if (!bigTopic) return toast('큰 주제를 입력해 주세요.');
+
+  /*
+   * 마지막 그물.
+   *
+   * 위 가로채기를 다 빠져나와 여러 주제가 한 줄로 이어붙은 채 여기까지 오면,
+   * 한 번 이어붙은 뒤에는 되돌릴 방법이 없다. "부동산 정책 전기차 보조금" 은
+   * "2026년 상반기 부동산 정책" 같은 멀쩡한 주제와 생김새가 같기 때문이다.
+   *
+   * 그래서 자동으로 쪼개지 않고 **사람에게 묻는다.** 조용히 넣어버리면
+   * 엉뚱한 주제 하나로 글 몇 편이 써지고 나서야 알게 된다.
+   */
+  if (bigTopic.length > SUSPICIOUS_TOPIC_CHARS) {
+    const ok = confirm(
+      `큰 주제가 ${bigTopic.length}자로 깁니다.\n\n`
+      + `"${bigTopic.slice(0, 60)}${bigTopic.length > 60 ? '…' : ''}"\n\n`
+      + '여러 주제를 한 줄로 붙여넣으신 거라면 [취소]를 누르세요. '
+      + '아래 [여러 개 한 번에 넣기] 칸으로 옮겨 드립니다.\n'
+      + '이대로 주제 하나로 넣으려면 [확인]을 누르세요.',
+    );
+    if (!ok) {
+      input.value = '';
+      openBulkBox([$('bulk-topics').value.trim(), bigTopic].filter(Boolean).join('\n'));
+      toast('아래 칸으로 옮겼습니다. 한 줄에 하나씩 되도록 고친 뒤 [대기열에 모두 넣기]를 누르세요.');
+      return;
+    }
+  }
 
   const targetCount = Number($('s-target-count').value) || 1;
   input.value = '';
@@ -770,33 +806,221 @@ $('s-big-topic').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') { event.preventDefault(); submitOrder(); }
 });
 
-// 붙여넣을 수 있는 큰 주제 개수의 상한. 이보다 많으면 나눠서 붙여달라고 안내한다.
-const MAX_PASTE_TOPICS = 100;
+/* ---------- 큰 주제 여러 개 한 번에 넣기 ---------- */
+
+// 한 번에 넣을 수 있는 큰 주제 개수의 상한.
+// 하나가 글 여러 편을 부르기 때문에, 실수로 긴 목록을 통째로 붙여넣었을 때
+// 수백 편이 조용히 예약되는 일을 막는 선이다.
+const MAX_BULK_TOPICS = 100;
 
 /**
- * 큰 주제 칸에 **여러 줄**을 한꺼번에 붙여넣으면, 한 줄씩 잘라 그 줄마다
- * 따로따로 대기열에 넣는다. (한 줄만 붙여넣을 때는 평소처럼 그 줄이 그대로
- * 입력칸에 들어간다 — 여기서 아무 것도 하지 않고 브라우저 기본 동작에 맡긴다)
+ * 붙여넣은 목록에서 큰 주제만 뽑아낸다.
  *
- * 엑셀 등에서 여러 칸을 복사해 오면 탭으로 나뉜 경우가 있어 첫 칸만 쓴다.
+ * 사람이 어디선가 복사해 온 목록은 깨끗하지 않다. 앞에 번호가 붙어 있거나
+ * (`1. 부동산 정책`), 글머리표가 있거나(`- 전기차`), 엑셀에서 여러 칸을
+ * 긁어와 탭이 섞여 있다. 그걸 그대로 주제로 쓰면 "1. 부동산 정책" 이라는
+ * 이상한 주제로 검색이 돈다.
+ *
+ * 숫자를 뗄 때는 **구분 기호가 붙은 경우만** 뗀다. `2026년 부동산 정책` 처럼
+ * 숫자로 시작하는 멀쩡한 주제를 잘라먹으면 안 되기 때문이다.
+ *
+ * @returns {{topics: string[], cleaned: string[], duplicates: number}}
+ *   topics  — 중복까지 걷어낸 최종 목록 (실제로 대기열에 넣을 것)
+ *   cleaned — 번호·글머리표만 떼고 **중복은 살린** 목록 (화면에 보여줄 것)
  */
-$('s-big-topic').addEventListener('paste', (event) => {
-  const raw = event.clipboardData?.getData('text') || '';
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.split('\t')[0].trim().replace(/^["']|["']$/g, ''))
-    .filter(Boolean);
+/**
+ * 줄을 나누는 문자.
+ *
+ * `\n` 만 보면 안 된다. 어디서 복사해 오느냐에 따라 `\r\n`(윈도우 메모장),
+ * `\r`(옛 맥과 일부 앱), `U+2028`(웹페이지·문서앱)이 섞여 온다.
+ * 하나라도 놓치면 그 목록은 통째로 한 줄이 되어 **주제 하나로 들어간다.**
+ */
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 
-  if (lines.length <= 1) return;   // 한 줄이면 그냥 붙여넣게 둔다.
-  event.preventDefault();
+function parseBigTopics(raw) {
+  const seen = new Set();
+  const topics = [];
+  const cleaned = [];
+  let duplicates = 0;
 
-  const topics = lines.slice(0, MAX_PASTE_TOPICS);
-  if (lines.length > MAX_PASTE_TOPICS) {
-    toast(`한 번에 ${MAX_PASTE_TOPICS}개까지만 넣습니다. 나머지 ${lines.length - MAX_PASTE_TOPICS}개는 나눠서 다시 붙여넣어 주세요.`);
+  for (const line of String(raw).split(LINE_BREAK)) {
+    const cell = line
+      .split('\t')[0]                        // 엑셀에서 긁어오면 탭으로 나뉜다. 첫 칸만.
+      .trim()
+      .replace(/^\d{1,3}\s*[.)]\s+/, '')     // "1. " · "12) "
+      .replace(/^[-*•·]\s+/, '')             // "- " · "• "
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .trim();
+    if (!cell) continue;
+    cleaned.push(cell);
+
+    const key = cell.toLowerCase();
+    if (seen.has(key)) { duplicates += 1; continue; }
+    seen.add(key);
+    topics.push(cell);
   }
-  queueManyBigTopics(topics);
+  return { topics, cleaned, duplicates };
+}
+
+/** 지금 입력칸에 몇 개가 잡히는지 보여준다. 넣기 전에 눈으로 확인하는 장치다. */
+function renderBulkCount() {
+  const { topics, duplicates } = parseBigTopics($('bulk-topics').value);
+  const over = Math.max(0, topics.length - MAX_BULK_TOPICS);
+  const each = Number($('s-target-count').value) || 1;
+
+  const parts = [`${Math.min(topics.length, MAX_BULK_TOPICS)}개 인식`];
+  if (topics.length) parts.push(`글 ${Math.min(topics.length, MAX_BULK_TOPICS) * each}편`);
+  if (duplicates) parts.push(`중복 ${duplicates}개 제외`);
+  if (over) parts.push(`${MAX_BULK_TOPICS}개 초과분 ${over}개는 빠집니다`);
+
+  $('bulk-count').textContent = parts.join(' · ');
+  $('btn-bulk-add').disabled = topics.length === 0;
+}
+
+function openBulkBox(text) {
+  const box = $('bulk-box');
+  box.classList.remove('hidden');
+  const area = $('bulk-topics');
+  if (text !== undefined) area.value = text;
+  renderBulkCount();
+  area.focus();
+}
+
+$('btn-bulk-toggle').onclick = () => {
+  const box = $('bulk-box');
+  if (box.classList.contains('hidden')) openBulkBox();
+  else box.classList.add('hidden');
+};
+
+$('btn-bulk-close').onclick = () => $('bulk-box').classList.add('hidden');
+
+$('btn-bulk-clear').onclick = () => {
+  $('bulk-topics').value = '';
+  renderBulkCount();
+  $('bulk-topics').focus();
+};
+
+$('bulk-topics').addEventListener('input', renderBulkCount);
+// 개수를 바꾸면 "글 몇 편" 이 달라진다. 같이 갱신한다.
+$('s-target-count').addEventListener('input', () => {
+  if (!$('bulk-box').classList.contains('hidden')) renderBulkCount();
 });
 
+$('btn-bulk-add').onclick = async () => {
+  const { topics } = parseBigTopics($('bulk-topics').value);
+  if (!topics.length) return toast('큰 주제를 한 줄에 하나씩 넣어 주세요.');
+
+  const list = topics.slice(0, MAX_BULK_TOPICS);
+  const each = Number($('s-target-count').value) || 1;
+
+  /*
+   * 큰 주제 하나가 글 여러 편을 부른다. 30개를 넣으면 글 150편이다.
+   * 되돌리려면 주문을 하나씩 취소해야 하므로, 양이 많을 때는 한 번 묻는다.
+   */
+  if (list.length * each > 30
+      && !confirm(`큰 주제 ${list.length}개를 넣습니다. 각 ${each}건씩이라 `
+        + `글 ${list.length * each}편이 예약됩니다.\n계속할까요?`)) {
+    return;
+  }
+
+  const button = $('btn-bulk-add');
+  button.disabled = true;
+  try {
+    const added = await queueManyBigTopics(list);
+    // 넣은 것만 지운다. 실패한 게 있으면 남겨서 다시 시도할 수 있게 한다.
+    if (added === list.length) {
+      $('bulk-topics').value = '';
+      $('bulk-box').classList.add('hidden');
+    }
+  } finally {
+    button.disabled = false;
+    renderBulkCount();
+  }
+};
+
+/**
+ * 한 줄짜리 큰 주제 칸에 **여러 줄**이 들어오는 경우를 가로챈다.
+ *
+ * 한 줄짜리 input 에 여러 줄을 넣으면 브라우저가 **줄바꿈을 공백으로 바꿔
+ * 한 줄로 이어붙인다.** 그래서 그냥 두면
+ *
+ *     부동산 정책
+ *     국가 지원금      →   "부동산 정책 국가 지원금 전기차"  (주제 하나!)
+ *     전기차
+ *
+ * 가 되어 통째로 하나의 주문으로 들어간다. 실제로 이 일이 있었다.
+ *
+ * 한 번 이어붙고 나면 되돌릴 수 없다. 공백으로 이어붙은 "부동산 정책 국가 지원금" 은
+ * "2026년 부동산 정책" 같은 멀쩡한 주제와 구분할 방법이 없기 때문이다.
+ * **그래서 붙기 전에 잡아야 한다.**
+ *
+ * 글자가 칸에 들어오는 길은 하나가 아니다.
+ *   - Ctrl+V           → paste
+ *   - 드래그해서 끌어놓기 → drop (paste 가 안 뜬다)
+ *   - 자동완성·입력도구  → beforeinput (paste 도 drop 도 안 뜬다)
+ * 예전에는 paste 만 막아서 나머지 두 길로 들어온 목록이 그대로 뭉갰다.
+ * 이제 세 곳을 다 막고, 같은 처리를 한 함수에 모아 둔다.
+ *
+ * **곧바로 대기열에 넣지는 않는다.** 예전에는 붙여넣는 순간 바로 넣었는데,
+ * 50줄을 붙여넣으면 확인할 틈도 없이 글 수백 편이 예약돼 버렸다.
+ * 이제는 아래 칸으로 옮겨 담아 보여주고, [대기열에 모두 넣기] 를 누를 때 들어간다.
+ *
+ * @returns {boolean} 가로챘으면 true. 부르는 쪽에서 기본 동작을 막는다.
+ */
+function divertMultilineTopics(raw) {
+  if (!raw || !LINE_BREAK.test(raw)) return false;
+
+  const { topics, cleaned } = parseBigTopics(raw);
+  if (topics.length <= 1) return false;
+
+  /*
+   * 칸에는 **중복까지 그대로** 옮긴다.
+   *
+   * 여기서 미리 지워버리면 사람은 자기가 붙여넣은 목록이 왜 줄어들었는지 모른다.
+   * 눈에 보이게 두고 "중복 N개 제외" 라고 세어 주는 편이, 넣기 전에 목록이
+   * 맞는지 확인하는 데 낫다. 실제로 넣을 때는 어차피 한 번만 들어간다.
+   *
+   * 치던 내용이 있으면 위에 살려 둔다. 날려버리면 다시 쳐야 한다.
+   */
+  const typed = $('s-big-topic').value.trim();
+  const current = $('bulk-topics').value.trim();
+  const merged = [current, typed, cleaned.join('\n')].filter(Boolean).join('\n');
+  $('s-big-topic').value = '';
+
+  openBulkBox(merged);
+  toast(`큰 주제 ${topics.length}개를 아래 칸으로 옮겼습니다. 확인하고 [대기열에 모두 넣기]를 누르세요.`);
+  return true;
+}
+
+$('s-big-topic').addEventListener('paste', (event) => {
+  if (divertMultilineTopics(event.clipboardData?.getData('text') || '')) {
+    event.preventDefault();
+  }
+});
+
+$('s-big-topic').addEventListener('drop', (event) => {
+  if (divertMultilineTopics(event.dataTransfer?.getData('text') || '')) {
+    event.preventDefault();
+  }
+});
+
+/*
+ * 마지막 그물.
+ *
+ * paste 도 drop 도 아닌 길로 글자가 들어올 때가 있다(자동완성, 입력도구,
+ * 클립보드 관리 프로그램 등). beforeinput 은 **브라우저가 값을 건드리기 전에**
+ * 뜨고, 그 시점에는 줄바꿈이 아직 살아 있다. 여기서 잡으면 전부 걸린다.
+ */
+$('s-big-topic').addEventListener('beforeinput', (event) => {
+  const raw = event.data || event.dataTransfer?.getData('text') || '';
+  if (divertMultilineTopics(raw)) event.preventDefault();
+});
+
+/**
+ * 큰 주제 여러 개를 차례로 대기열에 넣는다.
+ * @returns {Promise<number>} 실제로 들어간 개수
+ */
 async function queueManyBigTopics(topics) {
   const targetCount = Number($('s-target-count').value) || 1;
   toast(`큰 주제 ${topics.length}개를 대기열에 넣는 중...`);
@@ -822,6 +1046,7 @@ async function queueManyBigTopics(topics) {
     toast(`${added}개 추가, ${failed.length}개 실패 — ${failed[0]}`
       + (failed.length > 1 ? ` 외 ${failed.length - 1}건` : ''));
   }
+  return added;
 }
 
 $('order-list').addEventListener('click', async (event) => {
