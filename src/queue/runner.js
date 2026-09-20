@@ -150,13 +150,20 @@ async function processJob(job) {
   if (research) notes.push(`검색 ${research.searches}회 · 출처 ${post.sources.length}건`);
   if (tableRows) {
     notes.push(post.tableExpected ? `표 ${tableRows}/${post.tableExpected}행` : `표 ${tableRows}행`);
-    // 주제가 요구한 개수보다 적게 나왔다면 왜 적은지를 함께 남긴다.
-    // 이게 없으면 "TOP 50 인데 26행" 이 실패처럼 보인다.
+    /*
+     * 요구한 개수보다 적게 나왔다면 **왜** 적은지를 남긴다.
+     * 이게 없으면 "TOP 50 인데 31행" 이 그냥 실패처럼 보인다. 이유가 둘로 갈린다.
+     *   전수 조사에서 그만큼밖에 없었다   → 정상이다. 있는 것을 다 담은 것이다.
+     *   채우려 했지만 끝내 덜 채워졌다     → 아쉬운 결과지만 순위는 1위부터 이어진다.
+     */
     if (post.tableAsked && post.tableExpected && post.tableExpected < post.tableAsked) {
       notes.push(`전수 조사 결과 ${post.tableExpected}개뿐 (요청 ${post.tableAsked}개)`);
     }
+    if (post.tableMissing?.length && post.tableFilled) {
+      notes.push(`${post.tableFilled}개로 1위부터 다시 번호 매김`);
+    }
   }
-  if (post.tableMissing?.length) notes.push(`누락 ${post.tableMissing.length}건`);
+  if (post.tableMissing?.length) notes.push(`못 채운 번호 ${post.tableMissing.length}건`);
   if (post.repairs) notes.push(`보정 ${post.repairs}회`);
   if (compliance) notes.push(summarize(compliance));
 
@@ -616,19 +623,37 @@ async function loop() {
         continue;
       }
 
-      // AI 가 "이 주제로는 못 쓰겠다" 고 거절한 경우다.
-      // 같은 주제로 다시 물어봐야 같은 대답이 온다. 재시도는 호출만 버리는 짓이고,
-      // 설정이 잘못된 것도 아니니 연속 실패로 세지도 않는다. 바로 다음 주제로 간다.
+      /*
+       * AI 가 "이 주제로는 못 쓰겠다" 고 거절한 경우다.
+       *
+       * 여기까지 왔다는 것은 **이미 한 번 되물어 본 뒤**다. (설정의
+       * "근거가 없어도 무조건 쓰기" 가 켜져 있으면 AI 층에서 "자료가 없어도
+       * 알려진 범위와 추정으로 쓰라" 고 붙여 한 번 더 물어본다)
+       *
+       * 두 번 다 거절했다면 같은 주제로 또 물어봐야 같은 대답이 온다.
+       * 재시도는 호출만 버리는 짓이고, 설정이 잘못된 것도 아니니 연속 실패로
+       * 세지도 않는다. 바로 다음 주제로 간다.
+       */
       if (error.refusal) {
+        const why = shorten(error.reason || message);
+        const insisting = getSettings().post.neverRefuse;
         updateJob(job.id, {
           status: STATUS.SKIPPED,
-          message: `AI가 이 주제를 거절했습니다: ${shorten(error.reason || message)}`,
+          message: `AI가 이 주제를 거절했습니다: ${why}`,
           detail: String(error.reason || message),
         });
         logger.warn(
-          `[${job.topic}] AI가 이 주제를 거절해 건너뜁니다. ${shorten(error.reason || message, 200)}`,
+          `[${job.topic}] AI가 이 주제를 거절해 건너뜁니다`
+          + `${insisting ? ' (추정으로라도 쓰라고 한 번 더 요청했는데도 거절했습니다)' : ''}. `
+          + shorten(error.reason || message, 200),
           { jobId: job.id },
         );
+        if (!insisting) {
+          logger.info(
+            '설정에서 [근거가 없어도 무조건 글 쓰기] 를 켜면 이런 주제도 '
+            + '알려진 내용과 추정으로 씁니다.',
+          );
+        }
         countForRequest(job, 'failed');
         continue;
       }

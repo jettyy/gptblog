@@ -28,7 +28,26 @@ export const MAX_COUNT = 300;
 const FILL_PASSES = 2;
 
 /** 표 행만 뽑는 호출에는 블로그 작법 지시가 필요 없다. 짧을수록 싸고 빠르다. */
-const ROW_SYSTEM = '표 데이터를 JSON 으로만 출력합니다. 설명을 붙이지 않습니다.';
+const ROW_SYSTEM = '표 데이터를 JSON 으로만 출력합니다. 설명을 붙이지 않습니다. '
+  + '확인된 자료가 없어도 거절하지 않고 알려진 범위와 추정으로 채웁니다.';
+
+/**
+ * 표를 채우다 거절당했을 때 되물을 말.
+ *
+ * "공식 순위가 없어서 순위를 매길 수 없습니다" 가 가장 흔한 거절이다.
+ * 애초에 공식 순위를 요구한 적이 없다는 것을 분명히 해주면 대개 풀린다.
+ */
+const ROW_INSIST = [
+  '[다시 요청합니다 — 거절하지 말고 표를 채워 주세요]',
+  '공식 순위표를 만들라는 요청이 아닙니다. 아래 기준을 하나 정해',
+  '널리 알려진 정보와 합리적인 추정으로 **줄을 세운 참고용 표**를 만드는 일입니다.',
+  '',
+  '- "공식 순위가 없다", "정확한 자료가 없다" 는 이유로 비워 두지 마세요.',
+  '- 순서에 확신이 없어도 괜찮습니다. 기준을 하나 잡고 그대로 끝까지 줄을 세우세요.',
+  '- 각 칸은 널리 알려진 특징으로 채우고, 구체적인 조사 수치는 지어내지 마세요.',
+  '',
+  '설명 없이 {"rows": [...]} 형태의 JSON 객체 하나만 출력하세요.',
+].join('\n');
 
 /** 전수 조사 호출. 있는 것을 다 찾는 일이라 검색을 켜고 돈다. */
 const ROSTER_SYSTEM = '주어진 범주에 실제로 속하는 대상을 빠짐없이 찾아 JSON 으로만 출력합니다. '
@@ -228,7 +247,17 @@ export async function collectRoster(topic, want, { signal } = {}) {
     try {
       reply = await runChatGptJson(
         buildRosterPrompt(topic, want, merged.names, pass),
-        { systemPrompt: ROSTER_SYSTEM, web: true, signal },
+        {
+          systemPrompt: ROSTER_SYSTEM,
+          web: true,
+          signal,
+          // 전수 조사도 "확인할 자료가 없다" 며 거절하는 일이 있다.
+          // 빈손으로 끝나면 표가 통째로 부실해지므로 한 번 되묻는다.
+          insist: '[다시 요청합니다] 공식 전수 명단이 없어도 괜찮습니다. '
+            + '널리 알려진 것만이라도 최대한 많이 모아 주세요. 빈손으로 돌려주지 마시고, '
+            + '확신이 서지 않으면 totalConfident 를 false 로 두면 됩니다. '
+            + '설명 없이 JSON 객체 하나만 출력하세요.',
+        },
       );
     } catch (error) {
       // 중지·로그인 만료·한도는 계속 돌려봐야 같다. 그대로 올린다.
@@ -417,7 +446,9 @@ export async function generateTableRows({
     const prompt = buildChunkPrompt({
       topic, headers, start, end, existingNames, count, roster, rankBasis,
     });
-    const reply = await runChatGptJson(prompt, { systemPrompt: ROW_SYSTEM, signal });
+    const reply = await runChatGptJson(prompt, {
+      systemPrompt: ROW_SYSTEM, signal, insist: ROW_INSIST,
+    });
     model = reply.model || model;
 
     let added = 0;
@@ -503,6 +534,33 @@ export async function generateTableRows({
     else stillMissing.push(rank);
   }
 
+  /*
+   * 끝내 못 채운 번호가 있으면 **번호를 다시 매긴다.**
+   *
+   * 50줄을 노렸는데 31줄만 채워졌다고 하자. 그대로 두면 표가
+   *
+   *     1위  ...      4위  ...      9위  ...     ← 2,3,5,6,7,8 이 통째로 빈다
+   *
+   * 처럼 나온다. 독자 눈에는 글이 잘못 만들어진 것으로만 보인다.
+   * 빠진 번호가 무엇이었는지는 독자에게 아무 의미가 없고, 우리에게만 의미가 있다.
+   *
+   * 그래서 화면에 나가는 표는 **1위부터 끊김 없이** 다시 번호를 매긴다.
+   * 순서(줄을 세운 결과)는 그대로 두고 번호만 당긴다. 몇 개를 못 채웠는지는
+   * missing 으로 올려보내 표 아래 안내와 로그에 쓴다.
+   */
+  let renumbered = 0;
+  if (stillMissing.length && rows.length) {
+    rows.forEach((row, index) => {
+      const wanted = String(index + 1);
+      if (row[0] !== wanted) renumbered += 1;
+      row[0] = wanted;
+    });
+    logger.info(
+      `못 채운 번호가 있어 ${rows.length}개 행을 1위부터 다시 번호 매겼습니다. `
+      + '(번호가 중간에 비어 있는 표보다 낫습니다)',
+    );
+  }
+
   // 열을 통째로 비워서 돌려주는 경우가 있어 채움 상태를 짚어둔다.
   const emptyCells = rows.reduce(
     (total, row) => total + row.filter((cell) => !cell).length,
@@ -512,5 +570,5 @@ export async function generateTableRows({
     logger.warn(`표에 빈 칸이 ${emptyCells}개 있습니다. 열 구성이 복잡하면 줄이는 편이 낫습니다.`);
   }
 
-  return { rows, model, missing: stillMissing, emptyCells };
+  return { rows, model, missing: stillMissing, emptyCells, renumbered };
 }

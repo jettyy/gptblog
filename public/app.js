@@ -388,6 +388,7 @@ function renderSettings() {
   $('s-repairs').value = s.quality.maxRepairs;
   $('s-enforce').checked = Boolean(s.quality.enforce);
   $('s-block').checked = Boolean(s.quality.blockOnFail);
+  $('s-never-refuse').checked = Boolean(s.post.neverRefuse);
   $('s-criteria').checked = Boolean(s.post.addCriteria);
   $('s-faq').checked = Boolean(s.post.addFaq);
 
@@ -518,6 +519,7 @@ function collectSettings() {
       sectionCount: Number($('s-sections').value),
       audience: $('s-audience').value,
       extraGuideline: $('s-guideline').value,
+      neverRefuse: $('s-never-refuse').checked,
       addCriteria: $('s-criteria').checked,
       addFaq: $('s-faq').checked,
       appendTags: $('s-tags').checked,

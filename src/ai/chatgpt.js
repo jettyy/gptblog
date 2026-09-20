@@ -605,10 +605,38 @@ export async function runChatGptJson(prompt, options = {}) {
       if (dump) logger.warn(`AI 원문을 ${dump} 에 남겼습니다.`);
     }
 
-    // JSON 대신 긴 산문이 왔다면 형식 문제가 아니라 "이 주제로는 못 쓰겠다" 는 거절이다.
-    // 형식을 다시 일러줘도 소용없으니 호출을 한 번 더 쓰지 않고 이유를 그대로 올린다.
+    /*
+     * JSON 대신 긴 산문이 왔다면 형식 문제가 아니라 "이 주제로는 못 쓰겠다" 는 거절이다.
+     *
+     * 형식을 다시 일러줘도 소용없다. 필요한 건 형식 안내가 아니라 **"자료가 없어도
+     * 아는 범위와 추정으로 쓰라"** 는 지시다. 그래서 부르는 쪽이 insist 를 넘겼으면
+     * 그 말을 붙여 한 번만 더 물어본다.
+     *
+     * 한 번만이다. 두 번째도 거절하면 진짜로 못 쓰는 주제이니 호출을 더 버리지 않는다.
+     */
     if (lastText.trim().length > 120 && !lastText.includes('{')) {
       const reason = lastText.trim().replace(/\s+/g, ' ').slice(0, 300);
+
+      if (options.insist) {
+        logger.warn(`AI가 거절했습니다. 추정으로라도 쓰라고 다시 요청합니다. (${reason.slice(0, 120)})`);
+        try {
+          // 되물을 때는 insist 를 빼서 부른다. 안 그러면 끝없이 서로 되물을 수 있다.
+          const { insist, ...rest } = options;
+          const retry = await runChatGpt(`${prompt}\n\n${insist}`, rest);
+          return {
+            data: extractJson(retry.text),
+            model: retry.model,
+            costUsd: retry.costUsd,
+            searches: retry.searches,
+            fetches: retry.fetches,
+            insisted: true,
+          };
+        } catch (retryError) {
+          logger.warn(`다시 요청했지만 또 실패했습니다: ${String(retryError.message).split('\n')[0]}`);
+          // 아래로 내려가 원래 거절 이유를 그대로 올린다. 그게 사람이 볼 진짜 원인이다.
+        }
+      }
+
       const refusal = new Error(`AI가 이 주제로 글쓰기를 거절했습니다: ${reason}`);
       refusal.refusal = true;
       refusal.reason = lastText.trim();

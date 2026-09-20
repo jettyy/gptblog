@@ -285,6 +285,14 @@
       <label class="check"><input id="s-enforce" type="checkbox"> 검사에 걸리면 자동으로 고쳐 쓰기</label>
       <label class="check"><input id="s-block" type="checkbox"> 끝내 못 고치면 저장하지 않기
         <span class="sub">끄면 미준수 항목을 표시만 하고 초안으로 올립니다</span></label>
+      <label class="wide check"><input id="s-never-refuse" type="checkbox"> 근거가 없어도 무조건 글 쓰기
+        <span class="sub">켜면 확인된 자료를 못 구해도 <b>거절하지 않고</b> 과거 자료·널리 알려진 내용·
+          합리적인 추정으로 끝까지 씁니다. 대신 확실하지 않은 부분은 "일반적으로", "알려져 있습니다" 처럼
+          <b>추정임을 본문에 밝힙니다.</b><br>
+          순위 글도 마찬가지입니다. 50개를 노렸는데 31개만 확인되면 <b>31개로 1위부터 끝까지 등수를 매깁니다.</b>
+          번호가 중간에 비는 표는 만들지 않습니다.<br>
+          끄면 AI가 "확인된 자료가 없어 쓸 수 없습니다" 라며 그 주제를 통째로 건너뜁니다.<br>
+          <b>주의:</b> 켜면 추정으로 쓴 문장이 섞입니다. 임시저장만 하니 발행 전에 꼭 읽어 보세요</span></label>
       <label class="check"><input id="s-criteria" type="checkbox"> 서두에 선정 기준 밝히기</label>
       <label class="check"><input id="s-faq" type="checkbox"> 마지막에 자주 묻는 질문 넣기</label>
     </div>

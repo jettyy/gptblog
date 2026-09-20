@@ -15,7 +15,11 @@ const BASE_SYSTEM = [
   '당신은 네이버 블로그 정보성 포스팅 전문 에디터이자 전문 카피라이터입니다.',
   '구글 알고리즘이 "고품질의 정보성 글"로 인식할 만큼 깊이 있고 구조화된 한국어 포스팅을 씁니다.',
   '모든 문장은 "~습니다", "~입니다" 형태의 완전한 종결어미로 끝냅니다.',
-  '단순 나열 대신 근거와 맥락을 붙이고, 확실하지 않은 수치나 고유명사는 지어내지 않습니다.',
+  '단순 나열 대신 근거와 맥락을 붙입니다.',
+  // 거절하지 않게 하는 지시. "지어내지 마라" 만 강하게 걸어두면 확인된 자료가
+  // 없을 때 아예 글쓰기를 거부해 버린다. 쓰되 어디까지가 추정인지 밝히게 한다.
+  '자료가 부족해도 글쓰기를 거절하지 않습니다. 알려진 범위와 합리적인 추정으로 끝까지 쓰고,'
+  + ' 확실하지 않은 부분은 단정하는 대신 추정임을 밝힙니다.',
   '특수문자와 이모지를 쓰지 않고 깔끔한 텍스트로만 씁니다.',
   '요청받은 JSON 형식만 정확히 출력합니다.',
 ].join(' ');
@@ -213,30 +217,86 @@ function structureGuide(shape, settings, count) {
  * 모델이 애써 찾아온 수치를 다 버리고 두루뭉술하게 쓴다. 반대로 자료가
  * 없는데 수치를 쓰라고 하면 지어낸다. 그래서 두 경우를 나눈다.
  */
-function honestyBlock(hasResearch) {
+/**
+ * 사실관계를 어떻게 다룰지.
+ *
+ * 여기서 균형을 잘못 잡으면 두 가지 중 하나가 난다.
+ *   느슨하면 → 있지도 않은 제도와 수치를 사실처럼 적는다
+ *   빡빡하면 → **아예 글쓰기를 거절한다** ("확인된 자료가 없어 쓸 수 없습니다")
+ *
+ * 실제로 겪은 것은 두 번째였다. 검색이 빈손이면 몇 문단짜리 거절문이 오고
+ * 그 주제는 통째로 건너뛰어졌다. 그래서 선을 이렇게 긋는다.
+ *
+ *   쓰지 말 것  — 출처 URL, "취업률 87.3%" 같은 **구체적인 조사 수치**
+ *   써도 될 것  — 널리 알려진 사실, 과거에 그랬던 내용, 일반적인 경향,
+ *                 합리적인 추정. 단 **추정이라고 밝히고** 쓴다
+ *
+ * 즉 "모르면 쓰지 마라" 가 아니라 "모르면 모른다고 밝히고 쓰라" 다.
+ */
+function honestyBlock(hasResearch, neverRefuse) {
   const lines = ['[사실관계]'];
   if (hasResearch) {
     lines.push(
-      '- 구체적인 수치, 일정, 기준, 제도 내용은 **위 조사 자료에 있는 것만** 쓰세요.',
-      '- 조사 자료에 없는 수치는 지어내지 말고 "지역과 시기에 따라 다릅니다" 처럼 여지를 두세요.',
+      '- 구체적인 수치, 일정, 기준, 제도 내용은 **위 조사 자료에 있는 것만** 단정해서 쓰세요.',
+      '- 조사 자료에 없는 수치는 단정하지 말고 "지역과 시기에 따라 다릅니다" 처럼 여지를 두세요.',
       '- 조사 자료의 "확인하지 못한 내용" 은 단정하지 말고, 확인이 필요하다고 밝히세요.',
       '- 수치를 쓸 때는 기준 시점을 함께 밝히세요. (예: 2026년 기준)',
       '- 본문에 URL 이나 링크를 직접 적지 마세요. 출처 목록은 글 끝에 자동으로 붙습니다.',
     );
   } else {
     lines.push(
-      '- 실시간 검색을 하지 못했으므로, 공식 조사 수치나 연도별 통계를 지어내지 마세요.',
-      '- 모르는 제도나 금액은 "지역과 시기에 따라 다릅니다" 처럼 정직하게 여지를 두고 쓰세요.',
+      '- 실시간 검색 자료가 없습니다. **그래도 글은 끝까지 씁니다.**',
+      '- 널리 알려진 내용, 예전부터 그래 왔던 내용, 일반적인 경향을 근거로 쓰세요.',
+      '- 확실하지 않은 부분은 "일반적으로", "대체로", "알려져 있습니다", '
+      + '"해마다 조금씩 달라집니다" 처럼 **추정이라는 것이 드러나게** 쓰세요.',
+      '- 다만 "2026년 취업률 87.3%" 같은 **구체적인 조사 수치와 통계는 만들어 쓰지 마세요.** '
+      + '대신 "높은 편으로 알려져 있습니다" 처럼 방향만 쓰면 됩니다.',
+      '- 본문에 URL 이나 링크를 적지 마세요.',
     );
   }
-  const basis = hasResearch ? '공개된 자료' : '일반적으로 알려진 정보';
+
+  if (neverRefuse) {
+    lines.push(
+      '',
+      '[중요 — 어떤 경우에도 거절하지 마세요]',
+      '- "확인된 자료가 없어 쓸 수 없습니다", "정확한 정보를 제공하기 어렵습니다" 같은 '
+      + '**거절문을 쓰지 마세요.** 그런 답은 이 작업에서 실패로 처리됩니다.',
+      '- 자료가 부족하면 부족한 대로, 아는 범위와 추정으로 요청받은 구조를 **전부 채우세요.**',
+      '- 글 대신 설명이나 사과를 보내지 말고, 반드시 요청받은 JSON 객체 하나만 출력하세요.',
+      '- 확신이 서지 않는 내용은 빼는 것이 아니라, 추정임을 밝히고 넣는 것이 맞습니다.',
+    );
+  }
+
+  const basis = hasResearch ? '공개된 자료' : '일반적으로 알려진 정보와 추정';
   lines.push(
+    '',
     '- 순위는 절대적인 우열이 아니라 "정리한 참고 순서" 로 다루세요.',
     `- table.note 에는 "공식 순위가 아니라 ${basis}를 정리한 참고 자료이며 `
     + '최신 정보는 직접 확인이 필요하다"는 안내를 완전한 문장으로 넣으세요.',
   );
   return lines.join('\n');
 }
+
+/**
+ * 거절당했을 때 되물을 말.
+ *
+ * "형식을 지켜라" 가 아니라 **"자료가 없어도 쓰라"** 여야 한다.
+ * 거절의 원인은 형식이 아니라 "근거가 없으면 쓰면 안 된다" 는 판단이기 때문이다.
+ */
+export const INSIST_BLOCK = [
+  '[다시 요청합니다 — 거절하지 말고 반드시 써 주세요]',
+  '방금 보내주신 답은 글이 아니라 거절문이었습니다. 이 작업에서는 실패로 처리됩니다.',
+  '',
+  '확인된 최신 자료가 없어도 괜찮습니다. 아래대로 써 주세요.',
+  '- 예전부터 알려져 있던 내용, 일반적인 통념, 합리적인 추정으로 채우세요.',
+  '- 확실하지 않은 부분은 빼지 말고, "일반적으로", "대체로", "알려져 있습니다" 처럼',
+  '  추정이라는 것이 드러나게 표현해서 **넣으세요.**',
+  '- 구체적인 조사 수치와 통계(예: "취업률 87.3%")만 만들어 쓰지 마시고,',
+  '  "높은 편으로 알려져 있습니다" 처럼 방향만 적으면 됩니다.',
+  '- 출처 URL 은 적지 마세요.',
+  '',
+  '설명이나 사과 없이, 요청받은 JSON 객체 하나만 출력하세요.',
+].join('\n');
 
 const FORMAT_BLOCK = [
   '[서식]',
@@ -256,7 +316,7 @@ const FORMAT_BLOCK = [
  * 반드시 밝힌다. "TOP 50" 을 기대하고 들어온 독자가 26줄을 보면 글이 부실한
  * 것처럼 읽히는데, 사실은 전국에 26곳뿐이라 다 담은 것이기 때문이다.
  */
-export function buildTableNote(aiNote, { asked, count, roster } = {}) {
+export function buildTableNote(aiNote, { asked, count, roster, filled } = {}) {
   const parts = [];
   const note = String(aiNote || '').trim();
   parts.push(note
@@ -270,13 +330,21 @@ export function buildTableNote(aiNote, { asked, count, roster } = {}) {
     parts.push(`순위는 "${basis}" 기준으로 줄을 세운 것입니다.`);
   }
 
-  if (asked && count && count < asked) {
+  /*
+   * 실제로 표에 담긴 줄 수(filled)를 기준으로 안내한다.
+   *
+   * 노린 개수(count)를 적어두면 31줄짜리 표 밑에 "50개를 담았습니다" 가 붙는다.
+   * 독자가 세어 보면 바로 틀린 말이다. 몇 줄이든 **담긴 만큼만** 말한다.
+   */
+  const shown = Number(filled) || Number(count) || 0;
+
+  if (asked && shown && shown < asked) {
     parts.push(
-      `해당 범주에 실제로 존재하는 대상이 ${count}개여서 ${asked}개를 채우지 않고 `
-      + `${count}개 전부를 담았습니다.`,
+      `${asked}개를 목표로 했지만 확인할 수 있는 대상이 ${shown}개여서 `
+      + `${shown}개까지 순위를 매겼습니다.`,
     );
-  } else if (roster?.total && count && roster.total > count) {
-    parts.push(`전체 약 ${roster.total}개 가운데 상위 ${count}개를 담았습니다.`);
+  } else if (roster?.total && shown && roster.total > shown) {
+    parts.push(`전체 약 ${roster.total}개 가운데 상위 ${shown}개를 담았습니다.`);
   }
 
   return parts.join(' ');
@@ -317,7 +385,7 @@ function rosterBlock({ asked, count, roster }) {
   return `${lines.join('\n')}\n\n============================================================\n`;
 }
 
-function buildMainPrompt(topic, settings, {
+export function buildMainPrompt(topic, settings, {
   guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster,
 }) {
   const withTableRows = shape !== 'table';   // 큰 표는 뒤에서 따로 채운다.
@@ -335,7 +403,7 @@ ${buildRuleBlock(settings, shape)}
 ${structureGuide(shape, settings, count)}
 ${tableHint}
 
-${honestyBlock(Boolean(researchBlock))}
+${honestyBlock(Boolean(researchBlock), settings.post.neverRefuse)}
 
 ${FORMAT_BLOCK}
 
@@ -615,6 +683,7 @@ async function repairUntilCompliant(post, { topic, settings, systemPrompt, signa
     repaired.research = current.research;
     repaired.tableExpected = current.tableExpected;
     repaired.tableAsked = current.tableAsked;
+    repaired.tableFilled = current.tableFilled;
     repaired.tableMissing = current.tableMissing;
     repaired.rankBasis = current.rankBasis;
     repaired.rosterTotal = current.rosterTotal;
@@ -709,7 +778,12 @@ export async function generatePost(topic, options = {}) {
     buildMainPrompt(topic, settings, {
       guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster,
     }),
-    { systemPrompt, signal: options.signal },
+    {
+      systemPrompt,
+      signal: options.signal,
+      // 거절하면 "추정으로라도 쓰라" 고 한 번 되묻는다. 그래야 주제가 안 날아간다.
+      insist: settings.post.neverRefuse ? INSIST_BLOCK : '',
+    },
   );
 
   let post = normalize(reply.data, topic, settings, shape);
@@ -724,7 +798,7 @@ export async function generatePost(topic, options = {}) {
       ? post.table.headers
       : ['순위', '항목', '핵심 특징'];
 
-    const { rows, model, missing } = await generateTableRows({
+    const { rows, model, missing, renumbered } = await generateTableRows({
       topic,
       headers,
       count,
@@ -738,17 +812,22 @@ export async function generatePost(topic, options = {}) {
       heading: post.table?.heading || `${topic} 전체 정리`,
       headers,
       rows,
-      note: buildTableNote(post.table?.note, { asked, count, roster }),
+      note: buildTableNote(post.table?.note, { asked, count, roster, filled: rows.length }),
     };
     post.model = post.model || model || '';
     post.tableExpected = count;
     post.tableAsked = asked;
+    post.tableFilled = rows.length;
     post.tableMissing = missing;
     post.rankBasis = roster?.rankBasis || '';
     post.rosterTotal = roster?.total || null;
 
     if (missing.length) {
-      logger.warn(`표에서 ${missing.length}개 행을 끝내 채우지 못했습니다: ${missing.slice(0, 20).join(', ')}`);
+      logger.warn(
+        `표에서 ${missing.length}개 행을 끝내 채우지 못했습니다. `
+        + `${rows.length}개로 1위부터 다시 번호를 매겨 표를 완성했습니다. `
+        + '(빈 줄을 남기거나 글을 버리지 않습니다)',
+      );
     } else {
       logger.info(`표 ${rows.length}개 행을 빠짐없이 채웠습니다.`);
     }

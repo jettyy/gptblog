@@ -19,7 +19,7 @@ import {
   buildIntroHtml, buildBodyHtml, buildBodyPlan, buildTableChunks,
   buildTableHtml, htmlToPlainText, buildPreviewHtml, stripUrls,
 } from '../src/content/naver.js';
-import { buildTableNote } from '../src/content/generator.js';
+import { buildTableNote, INSIST_BLOCK, buildMainPrompt } from '../src/content/generator.js';
 import { buildMarkdown } from '../src/content/markdown.js';
 import { DEFAULT_SETTINGS, saveSettings, getSettings, publicSettings } from '../src/lib/settings.js';
 import {
@@ -677,21 +677,69 @@ test('조사해둔 목록이 있으면 그 안에서만 표를 채우게 한다'
 test('요청보다 적게 담은 표는 그 이유를 표 아래에 밝힌다', () => {
   // "TOP 50" 을 기대한 독자가 26행을 보면 부실해 보인다.
   // 사실은 전국에 26곳뿐이라 다 담은 것이므로 그 사실을 적어야 한다.
-  const short = buildTableNote('', { asked: 50, count: 26, roster: { rankBasis: '취업률' } });
+  const short = buildTableNote('', { asked: 50, count: 26, filled: 26, roster: { rankBasis: '취업률' } });
   assert.ok(short.includes('26'), '실제 개수가 안 적혔습니다');
   assert.ok(short.includes('50'), '요청 개수가 안 적혔습니다');
   assert.ok(short.includes('취업률'), '순위 기준이 안 적혔습니다');
 
   // 많이 있는 경우에는 "전체 몇 개 중 상위 몇 개" 를 적는다.
-  const long = buildTableNote('', { asked: 50, count: 50, roster: { total: 130, rankBasis: '규모' } });
+  const long = buildTableNote('', {
+    asked: 50, count: 50, filled: 50, roster: { total: 130, rankBasis: '규모' },
+  });
   assert.ok(long.includes('130'), '전체 개수가 안 적혔습니다');
   assert.ok(long.includes('상위 50'), '몇 개를 담았는지가 안 적혔습니다');
 
   // AI 가 써준 안내가 있으면 그것을 살린다. 같은 말을 두 번 붙이지 않는다.
   const mine = buildTableNote('취업률 기준으로 정리한 참고 자료입니다.', {
-    asked: 50, count: 50, roster: { rankBasis: '취업률' },
+    asked: 50, count: 50, filled: 50, roster: { rankBasis: '취업률' },
   });
   assert.equal(mine.match(/취업률/g).length, 1, '순위 기준이 두 번 적혔습니다');
+});
+
+test('표 아래 안내는 "담긴 줄 수" 를 말한다', () => {
+  /*
+   * 50줄을 노렸는데 31줄만 채워진 경우다. 노린 개수를 적어두면
+   * 31줄짜리 표 밑에 "50개를 담았습니다" 가 붙는다. 세어 보면 바로 틀린 말이다.
+   */
+  const note = buildTableNote('', { asked: 50, count: 50, filled: 31, roster: {} });
+  assert.ok(note.includes('31'), '실제로 담긴 줄 수가 안 적혔습니다');
+  assert.ok(!/50개를 담았|상위 50/.test(note), `담지도 않은 개수를 담았다고 적었습니다: ${note}`);
+});
+
+test('거절당했을 때 되물을 말에 "추정으로라도 쓰라" 가 들어 있다', () => {
+  /*
+   * 근거 자료가 없으면 AI 가 몇 문단짜리 거절문을 보내고 그 주제가 통째로
+   * 날아갔다. 되물을 때 필요한 건 형식 안내가 아니라 "자료가 없어도 쓰라" 다.
+   */
+  assert.ok(/거절/.test(INSIST_BLOCK), '거절하지 말라는 말이 없습니다');
+  assert.ok(/추정/.test(INSIST_BLOCK), '추정으로 쓰라는 말이 없습니다');
+  assert.ok(/JSON/.test(INSIST_BLOCK), 'JSON 만 내라는 말이 없습니다');
+  // 지어내면 안 되는 선도 같이 그어 둬야 한다.
+  assert.ok(/수치|통계/.test(INSIST_BLOCK), '조사 수치를 지어내지 말라는 선이 없습니다');
+});
+
+test('근거 없이도 쓰기를 켜면 프롬프트가 거절을 막는다', () => {
+  const build = (neverRefuse, researchBlock = '') => {
+    const config = structuredClone(settings);
+    config.post.neverRefuse = neverRefuse;
+    return buildMainPrompt('수도권 대학 순위 top50', config, {
+      guidelineBlock: '', exampleBlock: '', researchBlock,
+      shape: 'table', count: 50, asked: 50, roster: null,
+    });
+  };
+
+  const on = build(true);
+  assert.ok(/거절문을 쓰지 마세요/.test(on), '거절 금지 지시가 없습니다');
+  assert.ok(/추정/.test(on), '추정으로 쓰라는 안내가 없습니다');
+  // 지어내면 안 되는 선은 그대로 남아 있어야 한다. 아니면 통계를 만들어 낸다.
+  assert.ok(/만들어 쓰지 마세요/.test(on), '조사 수치를 지어내지 말라는 선이 사라졌습니다');
+
+  const off = build(false);
+  assert.ok(!/거절문을 쓰지 마세요/.test(off), '꺼 뒀는데도 거절 금지가 들어갔습니다');
+
+  // 조사 자료가 있을 때도 거절 금지는 그대로 붙어야 한다.
+  const researched = build(true, '[조사 자료]\n- 아무 내용');
+  assert.ok(/거절문을 쓰지 마세요/.test(researched), '조사 자료가 있으면 거절 금지가 빠집니다');
 });
 
 console.log('\n[6] 네이버 붙여넣기 성공 판정');
