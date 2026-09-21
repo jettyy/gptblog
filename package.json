@@ -11,7 +11,8 @@
     "setup": "node scripts/setup.js",
     "check": "node scripts/check.js",
     "check:editor": "node scripts/check-editor.js",
-    "check:bulk": "node scripts/check-bulk.js"
+    "check:bulk": "node scripts/check-bulk.js",
+    "check:image": "node scripts/check-image.js"
   },
   "engines": {
     "node": ">=20"

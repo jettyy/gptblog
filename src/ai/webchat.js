@@ -117,8 +117,19 @@ function authError(message) {
   return error;
 }
 
-/** 새 대화를 띄운다. */
-async function openChat({ model, signal } = {}) {
+/**
+ * 새 대화를 띄운다.
+ *
+ * @param {object}  options
+ * @param {boolean} options.temporary  임시 채팅으로 열지.
+ *   **그림을 만들 때는 반드시 false 여야 한다.** 임시 채팅에서는 이미지 생성이
+ *   막혀 있어서, 그려 달라고 하면 그림 대신 "여기서는 만들 수 없으니 일반
+ *   채팅을 이용해 주세요" 라는 글만 돌아온다. (실제로 겪은 문제다)
+ * @param {boolean} options.useWebModel  설정에 적어둔 글쓰기 모델을 쓸지.
+ *   그림에는 쓰지 않는다. 글쓰기용으로 고른 모델이 그림 도구를 못 부르는
+ *   경우가 있어서, 그림은 계정 기본 모델에 맡기는 편이 안전하다.
+ */
+async function openChat({ model, signal, temporary = false, useWebModel = true } = {}) {
   const settings = getSettings();
   if (!readChatGptSession().loggedIn) {
     throw authError(
@@ -131,10 +142,11 @@ async function openChat({ model, signal } = {}) {
   const page = await ctx.newPage();
 
   const params = new URLSearchParams();
-  const wanted = model || settings.chatgpt.webModel || '';
+  const wanted = model || (useWebModel ? settings.chatgpt.webModel : '') || '';
   if (wanted) params.set('model', wanted);
   // 100편을 돌리면 대화 목록이 100개 쌓인다. 임시 채팅이면 기록이 남지 않는다.
-  if (settings.chatgpt.temporaryChat) params.set('temporary-chat', 'true');
+  // (그림에는 쓰지 않는다. 위 주석 참고)
+  if (temporary) params.set('temporary-chat', 'true');
   const url = `${CHATGPT_ORIGIN}/${params.toString() ? `?${params}` : ''}`;
 
   try {
@@ -265,7 +277,10 @@ export function askChatGptWeb(prompt, { signal, timeoutMs, model } = {}) {
     const settings = getSettings();
     const limit = timeoutMs || settings.chatgpt.webTimeoutMs || 300000;
     const started = Date.now();
-    const page = await openChat({ model, signal });
+    // 글쓰기는 임시 채팅이어도 상관없다. 100편을 돌려도 대화 기록이 안 쌓인다.
+    const page = await openChat({
+      model, signal, temporary: Boolean(settings.chatgpt.temporaryChat),
+    });
 
     try {
       const { locator: composer } = await findFirst(page, SELECTORS.composer, 30000);
@@ -298,10 +313,27 @@ async function findImageSrc(page) {
     const turns = [...document.querySelectorAll('[data-message-author-role="assistant"], .agent-turn')];
     const last = turns[turns.length - 1] || document.body;
     const images = [...last.querySelectorAll('img')]
-      .map((node) => node.getAttribute('src') || node.currentSrc || '')
-      // 프로필 사진과 아이콘을 걸러낸다. 만든 그림은 크다.
+      .map((node) => {
+        /*
+         * **절대 주소로 만들어야 한다.**
+         *
+         * getAttribute('src') 는 문서에 적힌 그대로라서 "/files/…" 같은
+         * 상대 주소가 나올 수 있다. 그걸 그대로 쓰면 아래 걸러내기에서
+         * 떨어져 나가서, 그림이 붙어 있는데도 "답에 그림이 없습니다" 가 된다.
+         * currentSrc 와 src 프로퍼티는 절대 주소로 나오므로 그쪽을 먼저 쓴다.
+         */
+        const direct = node.currentSrc || node.src || '';
+        if (direct) return direct;
+        const attr = node.getAttribute('src') || '';
+        try {
+          return new URL(attr, document.baseURI).href;
+        } catch {
+          return attr;
+        }
+      })
+      // 아이콘은 대개 svg 다. 만든 그림은 png 나 webp 로 온다.
       .filter((src) => src && !/^data:image\/svg/i.test(src))
-      .filter((src) => /^(https?:|blob:)/i.test(src));
+      .filter((src) => /^(https?:|blob:|data:image\/)/i.test(src));
     return images[images.length - 1] || '';
   }).catch(() => '');
 }
@@ -317,8 +349,33 @@ function refusalFrom(text) {
   return '';
 }
 
+/**
+ * "이 창에서는 그림을 못 만든다" 는 답인지.
+ *
+ * 임시 채팅에서는 이미지 생성이 막혀 있다. 그려 달라고 하면 그림 대신
+ * "여기서는 이미지를 생성할 수 없습니다. 일반 채팅창을 이용해 주세요" 라는
+ * 글만 돌아온다. 이 경우는 프롬프트나 한도 문제가 아니라 **창을 잘못 연 것**이라
+ * 다른 실패와 섞어서 보여주면 사람이 원인을 못 찾는다.
+ */
+function looksWrongChatMode(text) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  return /(임시\s*채팅|일반\s*채팅|temporary chat|regular chat|normal chat)/i.test(value)
+    && /(이미지|그림|image|생성|generat)/i.test(value);
+}
+
 /** 주소에서 그림 바이트를 받아온다. blob: 은 페이지 안에서만 읽힌다. */
 async function fetchImage(page, src) {
+  // 이미 그림이 주소 안에 다 들어 있는 경우. 받아올 것이 없다.
+  const inline = /^data:([^;,]+)(;base64)?,(.*)$/i.exec(src);
+  if (inline) {
+    const mimeType = inline[1] || 'image/png';
+    const data = inline[2]
+      ? inline[3]
+      : Buffer.from(decodeURIComponent(inline[3]), 'utf8').toString('base64');
+    return { data, mimeType };
+  }
+
   if (/^blob:/i.test(src)) {
     const encoded = await page.evaluate(async (url) => {
       const response = await fetch(url);
@@ -357,7 +414,18 @@ export function generateImageWeb(prompt, { signal, timeoutMs, aspectRatio } = {}
   return exclusive(async () => {
     const settings = getSettings();
     const limit = timeoutMs || settings.image.timeoutMs || 300000;
-    const page = await openChat({ signal });
+
+    /*
+     * 그림은 **반드시 일반 채팅**으로 열어야 한다.
+     *
+     * 임시 채팅에서는 이미지 생성이 막혀 있어서, 그려 달라고 하면 그림 대신
+     * "여기서는 이미지를 생성할 수 없습니다. 일반 채팅창을 이용해 주세요" 라는
+     * 글만 돌아온다. 설정의 temporaryChat 은 글쓰기에만 적용한다.
+     *
+     * 글쓰기용으로 고른 모델도 넘기지 않는다. 그 모델이 그림 도구를 못 부르는
+     * 경우가 있어서, 그림은 계정 기본 모델에 맡기는 편이 안전하다.
+     */
+    const page = await openChat({ signal, temporary: false, useWebModel: false });
 
     // 비율은 말로 일러준다. 대화창에는 비율 옵션이 따로 없다.
     const ratio = aspectRatio || '16:9';
@@ -389,6 +457,23 @@ export function generateImageWeb(prompt, { signal, timeoutMs, aspectRatio } = {}
 
       if (!src) {
         const answer = await readAnswer(page);
+
+        /*
+         * "이 창에서는 못 만든다" 는 답이면 원인이 분명하다. 창을 잘못 연 것이다.
+         * 우리는 일반 채팅으로 열고 있으니, 이 답이 온다면 계정 쪽 설정이
+         * 임시 채팅을 기본으로 두고 있을 가능성이 높다. 다른 실패와 섞지 않고
+         * 무엇을 손봐야 하는지 그대로 알려준다.
+         */
+        if (looksWrongChatMode(answer)) {
+          throw new Error(
+            'ChatGPT 가 "이 창에서는 이미지를 생성할 수 없다" 고 답했습니다. '
+            + '임시 채팅에서는 그림을 만들 수 없습니다. 이 프로그램은 그림을 만들 때 '
+            + '일반 채팅으로 열지만, ChatGPT 계정 설정이 임시 채팅을 기본으로 두고 있으면 '
+            + '그것이 이깁니다. chatgpt.com 에서 임시 채팅을 끄고 다시 시도해 주세요. '
+            + `(ChatGPT 답: ${String(answer).replace(/\s+/g, ' ').slice(0, 120)})`,
+          );
+        }
+
         const refusal = refusalFrom(answer);
         throw new Error(refusal
           ? `ChatGPT 가 그림을 만들지 않았습니다: ${refusal}`

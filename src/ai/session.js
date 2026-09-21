@@ -24,7 +24,15 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-export const CHATGPT_ORIGIN = 'https://chatgpt.com';
+/**
+ * ChatGPT 주소.
+ *
+ * 환경변수로 바꿀 수 있게 열어 둔 것은 **자체 점검 때문**이다.
+ * (npm run check:image) 진짜 계정에 접속하지 않고 가짜 페이지로
+ * "임시 채팅에서는 그림이 안 만들어진다" 같은 상황을 재현해 본다.
+ * 평소에는 건드릴 이유가 없다.
+ */
+export const CHATGPT_ORIGIN = process.env.CHATGPT_ORIGIN || 'https://chatgpt.com';
 
 /** 로그인됐다는 뜻의 쿠키. 이름이 판마다 조금 달라서 후보를 여러 개 본다. */
 const SESSION_COOKIES = [

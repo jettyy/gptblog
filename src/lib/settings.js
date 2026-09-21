@@ -18,7 +18,16 @@ export const DEFAULT_SETTINGS = {
     webModel: '',                // 비우면 계정에서 마지막으로 쓴 모델
     webTimeoutMs: 300000,
     headless: false,             // 그림 생성 창을 숨길지. 숨기면 막히는 일이 있어 기본은 보임.
-    temporaryChat: true,         // 임시 채팅으로 물어본다. 100편을 돌려도 대화 기록이 안 쌓인다.
+
+    /*
+     * 임시 채팅으로 물어본다. 100편을 돌려도 대화 기록이 안 쌓인다.
+     *
+     * **글쓰기에만 적용된다.** 임시 채팅에서는 이미지 생성이 막혀 있어서,
+     * 그림까지 여기로 보내면 그림 대신 "여기서는 만들 수 없으니 일반 채팅을
+     * 이용해 주세요" 라는 글만 돌아온다. 그래서 그림은 이 설정과 무관하게
+     * 항상 일반 채팅으로 연다. (src/ai/webchat.js 의 generateImageWeb 참고)
+     */
+    temporaryChat: true,
   },
 
   // 글 설정
