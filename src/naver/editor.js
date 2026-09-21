@@ -319,6 +319,21 @@ export async function pasteHtml(page, scope, html) {
   return 'plain-text';
 }
 
+/**
+ * 에디터 안에 들어간 이미지 컴포넌트 개수.
+ *
+ * 글자 수만 재면 이미지가 사라진 것을 못 잡는다. 이미지가 빠져도 글자 수는
+ * 그대로이기 때문이다. 실제로 그것 때문에 **썸네일이 들어갔다가 조용히
+ * 지워진 채로** 저장된 적이 있다.
+ */
+async function imageCount(scope) {
+  try {
+    return await scope.locator('.se-component.se-image').count();
+  } catch {
+    return 0;
+  }
+}
+
 /** 현재 커서 위치에 이미지를 넣는다. */
 async function insertImage(page, scope, imagePath) {
   const { locator } = await findFirst(scope, SELECTORS.imageButton, 10000);
@@ -401,8 +416,26 @@ async function insertTable(page, scope, step, jobId) {
  * 무시된다. 게다가 지난번에 가운데 정렬로 쓴 글이 있으면 그 설정이 남아 있어서
  * 새 글도 가운데로 들어간다. 그래서 에디터 기능으로 직접 걸어줘야 한다.
  */
-async function alignBodyLeft(page, scope, jobId) {
+export async function alignBodyLeft(page, scope, jobId) {
   try {
+    /*
+     * **이미지가 들어간 뒤에는 이 방법을 쓰면 안 된다.**
+     *
+     * Ctrl+A 는 이미지 컴포넌트까지 선택하고, 거기에 문단 정렬 명령을 걸면
+     * 이미지가 빠져 버린다. 글자 수는 그대로여서 뒤따르는 검사로도 안 잡힌다.
+     * 그래서 부르는 쪽에서 이미지를 넣기 **전에** 부르도록 순서를 잡아 뒀는데,
+     * 나중에 순서가 바뀌어도 사고가 나지 않게 여기서 한 번 더 막는다.
+     */
+    const images = await imageCount(scope);
+    if (images > 0) {
+      logger.warn(
+        `본문에 이미지가 ${images}개 있어 전체 정렬을 건너뜁니다. `
+        + '(전체 선택이 이미지를 지워버립니다)',
+        { jobId },
+      );
+      return;
+    }
+
     const { locator } = await findFirst(scope, SELECTORS.body, 8000);
     await locator.first().click({ timeout: 8000 });
     await page.keyboard.press(`${MODIFIER}+A`);
@@ -519,12 +552,56 @@ export async function publishDraft({ post, thumbnailPath, jobId = '', bodyOption
     const introMode = await pasteHtml(page, scope, introHtml);
     logger.info(`도입부 입력 완료 (${introMode})`, { jobId });
 
+    /*
+     * 정렬을 **여기서** 걸어 준다. 예전에는 저장 직전에 걸었는데, 그게
+     * 썸네일이 사라진 원인이었다.
+     *
+     * 정렬은 Ctrl+A 로 본문을 통째로 선택한 뒤 정렬 버튼을 누른다. 저장 직전에
+     * 하면 그 선택 안에 **이미지 컴포넌트까지 들어간다.** 거기에 문단 정렬
+     * 명령을 걸면 이미지가 빠져 버린다. 글자 수는 그대로여서 기존 검사로는
+     * 잡히지도 않았다. 눈으로 보면 "넣었는데 다시 지워지는" 것처럼 보인다.
+     *
+     * 도입부까지만 들어간 지금은 본문이 글자뿐이라 통째로 선택해도 안전하다.
+     * 에디터는 현재 문단 정렬을 그대로 물려주므로, 여기서 한 번 맞춰 두면
+     * 뒤에 붙는 문단도 왼쪽 정렬로 들어온다. (원래 문제였던 "지난 글의
+     * 가운데 정렬이 남아 있는 것" 도 이 시점에 잡힌다)
+     */
+    const beforeAlign = await bodyTextLength(scope);
+    await alignBodyLeft(page, scope, jobId);
+    const afterAlign = await bodyTextLength(scope);
+    if (beforeAlign > 0 && afterAlign < beforeAlign * 0.9) {
+      throw new Error(
+        `정렬 과정에서 도입부가 줄었습니다 (${beforeAlign}자 → ${afterAlign}자). `
+        + '저장하지 않고 재시도합니다.',
+      );
+    }
+
     let thumbnailInserted = false;
     if (thumbnailPath && settings.thumbnail.insert) {
-      await insertImage(page, scope, thumbnailPath);
-      thumbnailInserted = true;
-      logger.info('썸네일 삽입 완료 (도입부 직후, 대표 이미지가 됩니다)', { jobId });
+      /*
+       * 썸네일이 안 들어가도 글은 저장한다.
+       *
+       * 예전에는 여기서 예외가 나면 글 전체가 실패했다. 그림 하나 때문에
+       * 1,800자짜리 글을 버릴 이유가 없다. 실패했다는 사실만 분명히 남긴다.
+       */
+      try {
+        await insertImage(page, scope, thumbnailPath);
+        thumbnailInserted = true;
+        logger.info('썸네일 삽입 완료 (도입부 직후, 대표 이미지가 됩니다)', { jobId });
+      } catch (error) {
+        logger.warn(
+          `썸네일을 본문에 넣지 못했습니다. 글은 그대로 저장합니다: ${error.message.split('\n')[0]}`,
+          { jobId },
+        );
+      }
+    } else if (thumbnailPath && !settings.thumbnail.insert) {
+      logger.info('설정에서 [썸네일을 본문 안에 넣기] 가 꺼져 있어 넣지 않았습니다.', { jobId });
+    } else if (!thumbnailPath) {
+      logger.warn('넣을 썸네일 파일이 없습니다. 이미지 없이 저장합니다.', { jobId });
     }
+
+    // 넣은 직후의 이미지 개수. 저장 직전에 이 숫자가 유지되는지 확인한다.
+    const imagesAfterThumb = await imageCount(scope);
 
     // 본문은 조각으로 나눠 붙인다. 조각 앞에 빈 문단을 두는 게 핵심이다.
     // 그게 없으면 조각의 첫 문단이 커서가 있던 문단 뒤에 그대로 이어붙어
@@ -575,20 +652,37 @@ export async function publishDraft({ post, thumbnailPath, jobId = '', bodyOption
       );
     }
 
-    // 저장 직전에 한 번에 맞춘다. 붙여넣기마다 하면 그때그때 선택을 잡느라 느리고,
-    // 어차피 마지막에 전체를 한 번 훑으면 중간에 가운데로 들어온 것까지 다 잡힌다.
-    const beforeAlign = await bodyTextLength(scope);
-    await alignBodyLeft(page, scope, jobId);
-
-    // 정렬은 Ctrl+A 로 본문을 통째로 선택한 뒤 버튼을 누른다. 버튼을 못 찾아
-    // 단축키로 넘어갔을 때 엉뚱한 동작이 일어나면 선택된 본문이 통째로
-    // 날아갈 수 있다. 저장하기 전에 글이 그대로 있는지 확인한다.
-    const afterAlign = await bodyTextLength(scope);
-    if (afterAlign < beforeAlign * 0.9) {
-      throw new Error(
-        `정렬 과정에서 본문이 줄었습니다 (${beforeAlign}자 → ${afterAlign}자). `
-        + '저장하지 않고 재시도합니다.',
-      );
+    /*
+     * 저장 직전에 **썸네일이 아직 살아 있는지** 확인한다.
+     *
+     * 넣는 것까지는 잘 되는데 뒤 작업이 그것을 지우는 일이 있었다.
+     * (정렬이 이미지까지 선택해서 날려버린 것이 원인이었고 위에서 순서를
+     * 바꿔 막았다) 그래도 붙여넣기나 커서 이동이 이미지를 건드릴 여지가
+     * 남아 있으니, 사라졌으면 여기서 한 번 더 넣는다.
+     *
+     * 위치는 글 끝이 된다. 도입부 뒤가 아니라 아쉽지만, 네이버는 글 안의
+     * 이미지를 대표 이미지로 쓰기 때문에 **없는 것보다 훨씬 낫다.**
+     */
+    if (thumbnailInserted) {
+      const imagesNow = await imageCount(scope);
+      if (imagesNow < imagesAfterThumb) {
+        logger.warn(
+          `넣었던 썸네일이 본문에서 사라졌습니다 (이미지 ${imagesAfterThumb}개 → ${imagesNow}개). `
+          + '글 끝에 다시 넣습니다.',
+          { jobId },
+        );
+        try {
+          await focusBodyEnd(page, scope);
+          await insertImage(page, scope, thumbnailPath);
+          logger.info('썸네일을 다시 넣었습니다.', { jobId });
+        } catch (error) {
+          thumbnailInserted = false;
+          logger.warn(
+            `썸네일을 다시 넣지 못했습니다. 글만 저장합니다: ${error.message.split('\n')[0]}`,
+            { jobId },
+          );
+        }
+      }
     }
 
     const confirmed = await saveDraft(page, scope);

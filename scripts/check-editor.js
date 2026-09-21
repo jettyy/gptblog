@@ -13,7 +13,9 @@
  */
 import { chromium } from 'playwright';
 import { chromiumOverride, ensureBrowsers } from '../src/lib/playwright.js';
-import { focusBodyEnd, pasteHtml, pasteThreshold } from '../src/naver/editor.js';
+import {
+  focusBodyEnd, pasteHtml, pasteThreshold, alignBodyLeft,
+} from '../src/naver/editor.js';
 
 /**
  * 붙여넣기를 받아 문단으로 쌓는 최소 에디터.
@@ -118,6 +120,84 @@ test('넣으려던 분량의 60% 는 들어가야 성공으로 본다', () => {
   const threshold = pasteThreshold(text);
   if (threshold < 600) throw new Error(`1,000자 글의 문턱이 ${threshold}자뿐입니다`);
 });
+
+console.log('\n[4] 전체 정렬이 썸네일을 지우지 않는다');
+
+/*
+ * 이 검사가 생긴 이유:
+ *   썸네일을 넣는 것까지는 잘 됐는데 **그 뒤에 조용히 사라졌다.**
+ *   원인은 왼쪽 정렬이었다. Ctrl+A 로 본문을 통째로 선택한 뒤 정렬 버튼을
+ *   누르면 그 선택 안에 이미지 컴포넌트까지 들어가고, 거기에 문단 정렬
+ *   명령이 걸리면서 이미지가 빠져 버렸다. 글자 수는 그대로여서 기존
+ *   검사(본문이 줄었는지)로도 안 잡혔다.
+ *
+ * 아래 가짜 에디터는 그 동작을 그대로 흉내낸다.
+ * 전체 선택 상태에서 정렬 버튼을 누르면 이미지를 지운다.
+ */
+function fakeEditorWithImage() {
+  return `<!doctype html><meta charset="utf-8">
+<button data-name="align-left">왼쪽정렬</button>
+<div class="se-main-container">
+  <div class="se-component se-text">
+    <div class="se-text-paragraph" contenteditable="true">도입부 문단입니다.</div>
+  </div>
+  <div class="se-component se-image"><img alt="썸네일"></div>
+</div>
+<script>
+  let allSelected = false;
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') allSelected = true;
+  }, true);
+  document.querySelector('[data-name="align-left"]').addEventListener('click', () => {
+    // 진짜 에디터가 하는 짓. 전체 선택 상태에서 문단 정렬을 걸면 이미지가 빠진다.
+    if (allSelected) {
+      for (const node of document.querySelectorAll('.se-component.se-image')) node.remove();
+    }
+  });
+</script>`;
+}
+
+{
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await context.newPage();
+  await page.setContent(fakeEditorWithImage());
+
+  const before = await page.locator('.se-component.se-image').count();
+  await alignBodyLeft(page, page.mainFrame(), 'check');
+  const after = await page.locator('.se-component.se-image').count();
+
+  test('본문에 이미지가 있으면 전체 정렬을 건너뛴다', () => {
+    if (before !== 1) throw new Error(`준비가 잘못됐습니다: 시작 이미지 ${before}개`);
+    if (after !== 1) throw new Error(`정렬이 이미지를 지웠습니다 (${before}개 → ${after}개)`);
+  });
+  await context.close();
+}
+
+{
+  // 이미지가 없을 때는 예전처럼 정렬을 걸어야 한다. 겁이 나서 아무것도 안 하면 안 된다.
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><meta charset="utf-8">
+<button data-name="align-left">왼쪽정렬</button>
+<div class="se-main-container">
+  <div class="se-component se-text">
+    <div class="se-text-paragraph" contenteditable="true">도입부 문단입니다.</div>
+  </div>
+</div>
+<script>
+  window.__aligned = false;
+  document.querySelector('[data-name="align-left"]')
+    .addEventListener('click', () => { window.__aligned = true; });
+</script>`);
+
+  await alignBodyLeft(page, page.mainFrame(), 'check');
+  const aligned = await page.evaluate(() => window.__aligned);
+
+  test('이미지가 없으면 예전처럼 왼쪽 정렬을 건다', () => {
+    if (!aligned) throw new Error('정렬 버튼을 누르지 않았습니다');
+  });
+  await context.close();
+}
 
 await browser.close();
 console.log(failures ? `\n실패 ${failures}건\n` : '\n모두 통과했습니다.\n');

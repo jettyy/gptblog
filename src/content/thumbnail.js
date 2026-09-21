@@ -12,14 +12,86 @@ import { maybeGenerateImage } from './imagegen.js';
  * AI 가 설계한 문구/색상을 HTML 템플릿에 얹고 스크린샷으로 PNG를 만든다.
  * 이미지 생성 API를 쓰지 않으므로 추가 비용이 없다.
  */
-/** data:image/png;base64,... 를 파일로 떨군다. */
-function saveDataUri(dataUri, jobId, title) {
-  const match = /^data:image\/([a-z]+);base64,(.+)$/i.exec(dataUri);
-  if (!match) throw new Error('이미지 데이터를 읽지 못했습니다.');
-  const ext = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
-  const fileName = `${Date.now()}-${jobId || slugify(title, 24)}.${ext}`;
+/**
+ * 파일 앞머리(매직 바이트)로 진짜 형식을 알아낸다.
+ *
+ * 서버가 알려주는 content-type 을 믿으면 안 된다. ChatGPT 가 만든 그림은
+ * `image/webp` 로 오기도 하고, CDN 이 `application/octet-stream` 으로
+ * 내려주는 경우도 있다. 그걸 그대로 확장자로 쓰면 엉뚱한 파일이 된다.
+ */
+export function sniffImage(buffer) {
+  if (buffer.length < 12) return '';
+  if (buffer.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') return 'png';
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'jpg';
+  if (buffer.subarray(0, 4).toString('latin1') === 'RIFF'
+      && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  if (buffer.subarray(0, 4).toString('latin1') === 'GIF8') return 'gif';
+  return '';
+}
+
+/**
+ * webp·gif 를 png 로 다시 뽑는다.
+ *
+ * 네이버 에디터는 webp 업로드를 거절하는 일이 있다. 거절당하면 업로드가
+ * 끝나지 않아서 글 전체가 실패한다. 어차피 스크린샷용 브라우저가 있으니
+ * 거기서 캔버스에 그려 png 로 바꿔 올린다. (새 의존성이 필요 없다)
+ */
+async function reencodeToPng(dataUri) {
+  const browser = await getRenderBrowser();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    const base64 = await page.evaluate(async (src) => {
+      const image = new Image();
+      image.src = src;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      canvas.getContext('2d').drawImage(image, 0, 0);
+      return canvas.toDataURL('image/png').split(',')[1];
+    }, dataUri);
+    return Buffer.from(base64, 'base64');
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+/**
+ * 받아온 그림을 파일로 떨군다.
+ *
+ * 예전에는 `data:image/([a-z]+);base64,` 만 받았다. 그래서 형식이 조금만
+ * 달라도(예: `data:application/octet-stream;base64,`) 여기서 예외가 났고,
+ * 그 예외가 renderThumbnail 을 통째로 무너뜨려 **HTML 썸네일 대체마저
+ * 못 만들었다.** 글에 이미지가 하나도 안 들어간 원인이 이것이다.
+ * 그래서 형식을 느슨하게 받고, 진짜 형식은 매직 바이트로 확인한다.
+ */
+async function saveDataUri(dataUri, jobId, title) {
+  const match = /^data:([^;,]*)(;base64)?,([\s\S]+)$/i.exec(String(dataUri).trim());
+  if (!match) throw new Error('이미지 데이터를 읽지 못했습니다. (data URI 형식이 아닙니다)');
+
+  let buffer = match[2]
+    ? Buffer.from(match[3], 'base64')
+    : Buffer.from(decodeURIComponent(match[3]), 'latin1');
+
+  let kind = sniffImage(buffer);
+  if (!kind) {
+    throw new Error(
+      `받은 데이터가 이미지가 아닙니다 (알려진 형식: ${match[1] || '없음'}, ${buffer.length}바이트).`,
+    );
+  }
+
+  // 네이버가 확실히 받아주는 형식으로 맞춘다.
+  if (kind !== 'png' && kind !== 'jpg') {
+    logger.info(`${kind} 그림을 png 로 바꿔서 올립니다. (네이버가 거절하는 형식입니다)`, { jobId });
+    buffer = await reencodeToPng(dataUri);
+    if (sniffImage(buffer) !== 'png') throw new Error(`${kind} 그림을 png 로 바꾸지 못했습니다.`);
+    kind = 'png';
+  }
+
+  const fileName = `${Date.now()}-${jobId || slugify(title, 24)}.${kind}`;
   const filePath = path.join(THUMB_DIR, fileName);
-  fs.writeFileSync(filePath, Buffer.from(match[2], 'base64'));
+  fs.writeFileSync(filePath, buffer);
   return { filePath, fileName };
 }
 
@@ -36,15 +108,35 @@ export async function renderThumbnail(post, { jobId = '', signal } = {}) {
     signal, width, height, jobId,
   });
 
+  /*
+   * 완성본(글자까지 그려진 그림)이 왔으면 브라우저를 띄울 이유가 없다.
+   * 받은 그림을 그대로 저장한다.
+   *
+   * **여기서 실패해도 던지지 않는다.** 예전에는 저장이 어긋나면 그 예외가
+   * renderThumbnail 을 통째로 무너뜨려서, HTML 썸네일 대체마저 못 만들고
+   * 글에 이미지가 하나도 안 들어갔다. 그림 한 장 저장에 실패한 것과
+   * "썸네일이 아예 없는 것" 은 전혀 다른 일이다.
+   */
+  let generatedFull = null;
   if (generated?.mode === 'full') {
-    // 완성본이라 브라우저를 띄울 이유가 없다. 받은 그림을 그대로 저장한다.
-    const { filePath, fileName } = saveDataUri(generated.dataUri, jobId, post.title);
-    const size = fs.statSync(filePath).size;
-    logger.info(`썸네일 저장 완료 (API 완성본, ${Math.round(size / 1024)}KB)`, { jobId });
-    return { filePath, fileName, style: 'api', generated: true, mode: 'full' };
+    try {
+      generatedFull = await saveDataUri(generated.dataUri, jobId, post.title);
+    } catch (error) {
+      logger.warn(
+        `만든 그림을 저장하지 못해 HTML 썸네일로 만듭니다: ${error.message}`,
+        { jobId },
+      );
+    }
   }
 
-  const background = generated;
+  if (generatedFull) {
+    const size = fs.statSync(generatedFull.filePath).size;
+    logger.info(`썸네일 저장 완료 (ChatGPT 완성본, ${Math.round(size / 1024)}KB)`, { jobId });
+    return { ...generatedFull, style: 'api', generated: true, mode: 'full' };
+  }
+
+  // full 모드였는데 저장이 안 됐으면 배경으로도 쓰지 않는다. 그 그림이 문제였을 수 있다.
+  const background = generated?.mode === 'full' ? null : generated;
   const spec = {
     ...post.thumbnail,
     // 정보성 글은 기호를 자제하는 편이 안전하다. 설정에서 켤 때만 넣는다.

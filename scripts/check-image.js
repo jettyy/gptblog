@@ -137,6 +137,24 @@ await new Promise((resolve) => server.listen(PORT, resolve));
 
 const { generateImageWeb, askChatGptWeb } = await import('../src/ai/webchat.js');
 const { closeChatGptContext } = await import('../src/ai/session.js');
+const { renderThumbnail, sniffImage } = await import('../src/content/thumbnail.js');
+const { closeRenderBrowser } = await import('../src/lib/playwright.js');
+
+/** renderThumbnail 에 넘길 최소 글. 썸네일 문구만 있으면 된다. */
+const samplePost = () => ({
+  title: '2026년 수도권 대학 순위 TOP 50 총정리',
+  thumbnail: {
+    posterLines: ['4년제만 답이 아니다', '취업 최강 전문대'],
+    ribbon: 'TOP 50 (2026 최신)',
+    subline: '실무와 취업률로 골랐습니다',
+    badge: '전문대',
+    keywords: ['간호보건', '반도체', 'IT'],
+    headline: '취업 최강 전문대',
+    scene: 'a bright college workshop',
+    style: 'minimal',
+    accent: '#16324F',
+  },
+});
 
 try {
   /* ---------- 그림: 일반 채팅으로 열려야 한다 ---------- */
@@ -191,15 +209,72 @@ try {
     '원인이 분명한 실패를 "한도 초과" 로 뭉개지 않는다',
     message.slice(0, 120),
   );
+
+  /* ---------- 그림이 안 나와도 썸네일 파일은 나와야 한다 ---------- */
+  /*
+   * 여기가 핵심이다. 그림 받아오기가 실패했을 때 **HTML 썸네일로 물러서야**
+   * 하는데, 예전에는 그 과정에서 예외가 나서 썸네일이 한 장도 안 만들어졌다.
+   * 글에 이미지가 통째로 빠진 원인이 이것이다. (mode 는 아직 stubborn 이다)
+   */
+  let fallback = null;
+  let fallbackError = '';
+  try {
+    fallback = await renderThumbnail(samplePost(), { jobId: 'checkfall' });
+  } catch (error) {
+    fallbackError = error.message;
+  }
+  check(
+    Boolean(fallback?.filePath) && fs.existsSync(fallback.filePath),
+    'ChatGPT 가 그림을 안 줘도 HTML 썸네일 파일이 만들어진다',
+    fallbackError || `${fallback?.fileName} (${fallback?.style})`,
+  );
+  if (fallback?.filePath) {
+    check(
+      sniffImage(fs.readFileSync(fallback.filePath)) === 'png',
+      'HTML 썸네일이 진짜 png 로 저장된다 (네이버가 받아주는 형식)',
+      sniffImage(fs.readFileSync(fallback.filePath)) || '형식 불명',
+    );
+    fs.rmSync(fallback.filePath, { force: true });
+  }
+
+  /* ---------- 그림이 나오면 그 완성본이 파일로 저장돼야 한다 ---------- */
   mode = 'normal';
+  let made = null;
+  let madeError = '';
+  saveSettings({ image: { enabled: true, mode: 'full', verifyText: false } });
+  try {
+    made = await renderThumbnail(samplePost(), { jobId: 'checkfull' });
+  } catch (error) {
+    madeError = error.message;
+  }
+  check(
+    Boolean(made?.filePath) && fs.existsSync(made.filePath),
+    'ChatGPT 가 준 그림이 썸네일 파일로 저장된다',
+    madeError || `${made?.fileName} (${made?.style})`,
+  );
+  if (made?.filePath) {
+    const kind = sniffImage(fs.readFileSync(made.filePath));
+    check(
+      kind === 'png' || kind === 'jpg',
+      '저장된 그림이 네이버가 받아주는 형식이다 (png 또는 jpg)',
+      kind || '형식 불명',
+    );
+    fs.rmSync(made.filePath, { force: true });
+  }
 } finally {
   await closeChatGptContext().catch(() => {});
+  await closeRenderBrowser().catch(() => {});
   server.close();
   saveSettings({
     chatgpt: {
       temporaryChat: before,
       headless: DEFAULT_SETTINGS.chatgpt.headless,
       webModel: DEFAULT_SETTINGS.chatgpt.webModel,
+    },
+    image: {
+      enabled: DEFAULT_SETTINGS.image.enabled,
+      mode: DEFAULT_SETTINGS.image.mode,
+      verifyText: DEFAULT_SETTINGS.image.verifyText,
     },
   });
   fs.rmSync(CHATGPT_SESSION_FILE, { force: true });
