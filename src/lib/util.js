@@ -40,8 +40,25 @@ export function normalizeTag(value = '') {
 export function parseTopics(raw = '') {
   const seen = new Set();
   const topics = [];
-  for (const line of String(raw).split(/\r?\n/)) {
-    const cell = line.split('\t')[0].trim().replace(/^["']|["']$/g, '').trim();
+  for (const line of String(raw).split(/\r\n|[\n\r\u2028\u2029]/)) {
+    const cell = line
+      .split('\t')[0]                        // 엑셀에서 긁어오면 탭으로 나뉜다. 첫 칸만.
+      .trim()
+      /*
+       * 앞에 붙은 번호와 글머리표를 뗀다.
+       *
+       * 어디서 복사해 온 목록에는 "1. 제목", "- 제목" 처럼 앞자리가 붙어 있다.
+       * 그대로 두면 "1. 자격증 TOP 5" 라는 주제로 검색이 돌고, 제목을 고정하는
+       * 경우에는 글 제목에 번호가 그대로 박힌다.
+       *
+       * 숫자는 **구분 기호가 뒤따를 때만** 뗀다. "2026년 부동산 정책" 처럼
+       * 숫자로 시작하는 멀쩡한 제목을 잘라먹으면 안 된다.
+       */
+      .replace(/^\d{1,3}\s*[.)]\s+/, '')
+      .replace(/^[-*•·]\s+/, '')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .trim();
     if (!cell) continue;
     // 엑셀 첫 줄이 머리글인 경우가 잦아서 걸러낸다.
     if (topics.length === 0 && /^(주제|제목|topic|title|키워드|keyword)$/i.test(cell)) continue;

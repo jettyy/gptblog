@@ -19,7 +19,9 @@ import {
   buildIntroHtml, buildBodyHtml, buildBodyPlan, buildTableChunks,
   buildTableHtml, htmlToPlainText, buildPreviewHtml, stripUrls,
 } from '../src/content/naver.js';
-import { buildTableNote, INSIST_BLOCK, buildMainPrompt } from '../src/content/generator.js';
+import {
+  buildTableNote, INSIST_BLOCK, buildMainPrompt, buildFixedTitleBlock, normalize,
+} from '../src/content/generator.js';
 import { buildMarkdown } from '../src/content/markdown.js';
 import { DEFAULT_SETTINGS, saveSettings, getSettings, publicSettings } from '../src/lib/settings.js';
 import {
@@ -847,6 +849,73 @@ test('네이버 태그에서 공백과 특수문자를 걷어낸다', () => {
 test('엑셀에서 붙여넣은 주제를 줄 단위로 읽는다', () => {
   const topics = parseTopics('주제\n자격증 TOP 5\t비고\n자격증 TOP 5\n\n전세 계약 서류');
   assert.deepEqual(topics, ['자격증 TOP 5', '전세 계약 서류']);
+});
+
+test('붙여넣은 목록의 번호와 글머리표를 떼어낸다', () => {
+  /*
+   * 어디서 복사해 온 목록에는 앞자리가 붙어 있다. 그대로 두면
+   * "1. 자격증 TOP 5" 라는 주제로 검색이 돌고, 제목을 고정한 경우에는
+   * 글 제목에 번호가 그대로 박힌다.
+   */
+  assert.deepEqual(
+    parseTopics('1. 첫 번째 제목\n2) 두 번째 제목\n- 세 번째 제목\n• 네 번째 제목'),
+    ['첫 번째 제목', '두 번째 제목', '세 번째 제목', '네 번째 제목'],
+  );
+  // 숫자로 시작하는 멀쩡한 제목을 잘라먹으면 안 된다.
+  assert.deepEqual(parseTopics('2026년 부동산 정책'), ['2026년 부동산 정책']);
+  assert.deepEqual(parseTopics('2026 전문대 순위 top50'), ['2026 전문대 순위 top50']);
+  // 줄 구분이 \r 이나 U+2028 이어도 읽어야 한다.
+  assert.deepEqual(parseTopics('가\r나\u2028다'), ['가', '나', '다']);
+});
+
+test('제목을 정해 주면 프롬프트가 그대로 쓰라고 못박는다', () => {
+  const title = '2026년 수도권 대학 순위 TOP 50 총정리';
+  const block = buildFixedTitleBlock(title);
+  assert.ok(block.includes(title), '제목이 안 들어갔습니다');
+  assert.ok(/바꾸지 마세요|바꾸지 않고/.test(block), '바꾸지 말라는 지시가 없습니다');
+  // 제목이 약속한 것을 본문이 지켜야 한다는 지시도 있어야 한다.
+  assert.ok(/본문/.test(block), '본문을 제목에 맞추라는 지시가 없습니다');
+  // 제목이 없으면 블록 자체가 붙지 않아야 한다.
+  assert.equal(buildFixedTitleBlock(''), '');
+  assert.equal(buildFixedTitleBlock('   '), '');
+
+  // 실제 프롬프트 맨 앞에 와야 한다. 뒤에 붙으면 모델이 제목을 지어낸다.
+  const prompt = buildMainPrompt(title, settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '',
+    shape: 'table', count: 50, asked: 50, roster: null, fixedTitle: title,
+  });
+  assert.ok(prompt.startsWith('[글 제목'), `프롬프트 맨 앞이 아닙니다: ${prompt.slice(0, 40)}`);
+  // 40자 제한 안내가 남아 있으면 모델이 긴 제목을 줄인다.
+  assert.ok(!/40자 이내/.test(prompt), '제목 길이 제한 안내가 남아 있습니다');
+  assert.ok(!/제목은 검색어가 앞쪽에/.test(prompt), '제목을 새로 쓰라는 안내가 남아 있습니다');
+});
+
+test('제목을 정해 주면 AI가 뭘 보냈든 그 제목으로 덮어쓴다', () => {
+  const title = '2026년 수도권 대학 순위 TOP 50 총정리';
+  // normalize 는 본문이 없으면 던진다. 최소한의 형태를 갖춰 준다.
+  const base = {
+    intro: ['도입 문단입니다.'],
+    sections: [{ heading: '소제목입니다', paragraphs: ['본문 문단입니다.'] }],
+    outro: ['마무리 문단입니다.'],
+    tags: ['가나다'],
+    thumbnail: {},
+  };
+
+  // 모델이 제목을 "더 좋게" 바꿔 보낸 경우.
+  const drifted = normalize({ ...base, title: '수도권 대학 순위 알아보기' }, title, settings, 'table', title);
+  assert.equal(drifted.title, title, '바뀐 제목이 그대로 들어갔습니다');
+
+  // 제목을 아예 빼먹은 경우.
+  const missing = normalize({ ...base }, title, settings, 'table', title);
+  assert.equal(missing.title, title);
+
+  // 100자가 넘는 제목도 자르지 않는다. 사용자가 그렇게 정한 것이다.
+  const long = `${'가'.repeat(120)}`;
+  assert.equal(normalize({ ...base }, long, settings, 'general', long).title, long);
+
+  // 고정 제목이 없으면 예전처럼 모델이 준 제목을 쓰고 100자로 자른다.
+  const free = normalize({ ...base, title: '나'.repeat(120) }, '주제', settings, 'general');
+  assert.equal(free.title.length, 100);
 });
 
 /* ---------- 주제 발굴 ---------- */

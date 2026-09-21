@@ -340,6 +340,38 @@ app.post('/api/topics', wrap(async (req, res) => {
   res.json({ ok: true, added: added.length, skipped: topics.length - added.length, jobs: listJobs() });
 }));
 
+/**
+ * 제목을 직접 정해 넣는 통로.
+ *
+ * 주제를 넣는 /api/topics 와 다른 점은 하나다. 여기 넣은 줄은 **글 제목 그대로**
+ * 쓰인다. AI 가 제목을 지어내지 않고, 본문만 그 제목에 맞춰 쓴다.
+ */
+app.post('/api/titles/preview', wrap(async (req, res) => {
+  const titles = parseTopics(req.body?.raw || '');
+  res.json({ ok: true, count: titles.length, titles: titles.slice(0, 200) });
+}));
+
+app.post('/api/titles', wrap(async (req, res) => {
+  const titles = parseTopics(req.body?.raw || '');
+  if (!titles.length) {
+    res.status(400).json({ ok: false, message: '제목을 한 줄에 하나씩 붙여넣어 주세요.' });
+    return;
+  }
+
+  // topic 과 fixedTitle 에 같은 값을 넣는다. 제목이 곧 쓸 내용이기 때문이다.
+  const added = addTopics(titles.map((title) => ({ topic: title, fixedTitle: title })));
+  logger.info(
+    `제목을 정해 둔 글 ${added.length}건을 작업 목록에 추가했습니다. `
+    + `(붙여넣기 ${titles.length}건, 중복 제외) 제목은 그대로 쓰입니다.`,
+  );
+  res.json({
+    ok: true,
+    added: added.length,
+    skipped: titles.length - added.length,
+    jobs: listJobs(),
+  });
+}));
+
 app.delete('/api/jobs/:id', wrap(async (req, res) => {
   removeJob(req.params.id);
   res.json({ ok: true, jobs: listJobs() });

@@ -46,6 +46,33 @@ ${text.split('\n').map((line) => (line.trim() ? `- ${line.trim()}` : '')).filter
 `;
 }
 
+/**
+ * 제목을 사용자가 정해 준 경우의 지시.
+ *
+ * 프롬프트 **맨 앞**에 놓는다. 뒤쪽에 한 줄로 붙이면 모델이 "더 좋은 제목" 을
+ * 지어내서 바꿔 버린다. 그리고 코드에서도 한 번 더 강제로 덮어쓴다.
+ * (generatePost 끝부분 참고) 프롬프트만으로는 글자 하나까지 지켜지지 않는다.
+ */
+export function buildFixedTitleBlock(fixedTitle) {
+  const title = String(fixedTitle || '').trim();
+  if (!title) return '';
+  return `[글 제목 — 이미 정해졌습니다. 바꾸지 마세요]
+이 글의 제목은 아래 한 줄입니다.
+
+${title}
+
+- title 필드에 위 문장을 **글자 하나도 바꾸지 않고** 그대로 넣으세요.
+- 더 좋은 제목을 지어내지 마세요. 줄이거나 늘이거나 맞춤법을 고치지도 마세요.
+- 제목에 든 숫자(TOP 50 등), 물음표, 따옴표, 기호도 그대로 두세요.
+- **본문은 이 제목이 약속한 내용을 지키도록 쓰세요.** 제목이 "TOP 50" 이라면
+  50개를 다루고, 제목이 질문이라면 본문에서 그 질문에 답해야 합니다.
+  제목과 본문이 어긋나면 독자가 속았다고 느낍니다.
+
+============================================================
+
+`;
+}
+
 /** 프롬프트 맨 끝에서 한 번 더 짚어준다. 마지막에 읽은 지시를 더 잘 따른다. */
 function buildGuidelineReminder(guideline) {
   const text = String(guideline || '').trim();
@@ -109,16 +136,18 @@ const THUMBNAIL_BLOCK = `[썸네일]
 썸네일 문구에는 특수문자와 이모지를 쓰지 마세요. 느낌표는 한 개까지 허용합니다.
 **본문 규칙과 달리 썸네일 문구는 "~습니다" 로 끝내지 않아도 됩니다.** 짧은 것이 우선입니다.`;
 
-function metaBlock() {
+function metaBlock(hasFixedTitle) {
   return `[검색 최적화 필드]
 - summary: 검색 결과에 뜰 한 줄 요약 (80~120자, "~습니다" 로 끝낼 것)
 - tags: 3~6개. 글 맨 끝에 #태그 로 붙습니다. 네이버 태그에는 공백을 넣을 수 없으니
   "국가기술자격증" 처럼 붙여 쓰고, 사람들이 실제로 검색할 만한 말을 고르세요.
-- 제목은 검색어가 앞쪽에 오도록 쓰되, 낚시성 표현은 쓰지 마세요.`;
+${hasFixedTitle
+    ? '- 제목은 이미 정해져 있습니다. 위에 적힌 그대로 쓰고 손대지 마세요.'
+    : '- 제목은 검색어가 앞쪽에 오도록 쓰되, 낚시성 표현은 쓰지 마세요.'}`;
 }
 
 /** 표를 한 번에 받아도 되는 글용 JSON 형식 안내. */
-function jsonShape({ withItems, withFaq, withCriteria, withTableRows }) {
+function jsonShape({ withItems, withFaq, withCriteria, withTableRows, withFixedTitle }) {
   const criteria = withCriteria
     ? `\n  "criteria": {
     "heading": "추천 항목을 고른 세 가지 기준",
@@ -157,7 +186,9 @@ function jsonShape({ withItems, withFaq, withCriteria, withTableRows }) {
     : '';
 
   return `{
-  "title": "제목 (낚시성 없이 명확하게, 40자 이내)",
+  "title": ${withFixedTitle
+    ? '"위에서 정해준 제목을 글자 하나도 바꾸지 않고 그대로"'
+    : '"제목 (낚시성 없이 명확하게, 40자 이내)"'},
   "summary": "한 줄 요약입니다.",
   "tags": ["태그1","태그2","태그3"],
   "guidelineCheck": "사용자 지침을 어떻게 반영했는지 한 줄 (지침 없으면 \\"\\")",
@@ -386,7 +417,7 @@ function rosterBlock({ asked, count, roster }) {
 }
 
 export function buildMainPrompt(topic, settings, {
-  guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster,
+  guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster, fixedTitle,
 }) {
   const withTableRows = shape !== 'table';   // 큰 표는 뒤에서 따로 채운다.
   const tableHint = withTableRows
@@ -394,7 +425,7 @@ export function buildMainPrompt(topic, settings, {
     : `- 이 글에는 ${count}개 항목이 들어간 큰 표가 하나 들어갑니다. `
       + '표의 행은 뒤에서 따로 채우므로 지금은 headers 와 heading, note 만 잡고 rows 는 넣지 마세요.';
 
-  return `${guidelineBlock}${rosterBlock({ asked, count, roster })}${basicsBlock(settings, topic)}
+  return `${buildFixedTitleBlock(fixedTitle)}${guidelineBlock}${rosterBlock({ asked, count, roster })}${basicsBlock(settings, topic)}
 
 위 주제로 네이버 블로그에 올릴 정보성 포스팅 한 편을 써주세요.
 ${researchBlock ? `\n${researchBlock}` : ''}
@@ -407,7 +438,7 @@ ${honestyBlock(Boolean(researchBlock), settings.post.neverRefuse)}
 
 ${FORMAT_BLOCK}
 
-${metaBlock()}
+${metaBlock(Boolean(fixedTitle))}
 
 ${THUMBNAIL_BLOCK}
 ${exampleBlock ? `\n${exampleBlock}\n` : ''}
@@ -418,6 +449,7 @@ ${jsonShape({
     withFaq: settings.post.addFaq,
     withCriteria: settings.post.addCriteria,
     withTableRows,
+    withFixedTitle: Boolean(fixedTitle),
   })}
 
 필요 없는 키는 빼도 되지만 title, intro, sections, outro, table 은 반드시 채우세요.${buildGuidelineReminder(settings.post.extraGuideline)}`;
@@ -493,8 +525,18 @@ function normalizeFaq(raw) {
     .slice(0, 8);
 }
 
-export function normalize(raw, topic, settings, shape = 'general') {
-  const title = String(raw.title || topic).trim().slice(0, 100);
+export function normalize(raw, topic, settings, shape = 'general', fixedTitle = '') {
+  /*
+   * 제목을 사용자가 정해 줬으면 모델이 뭘 보냈든 그것으로 덮어쓴다.
+   *
+   * 프롬프트로 "바꾸지 마세요" 를 못박아도 모델은 맞춤법을 고치거나 길이를
+   * 줄이거나 "2026년" 을 붙이는 식으로 손을 댄다. 제목을 고정하겠다고 한 이상
+   * 글자 하나도 달라지면 안 되므로 코드에서 확실히 끝낸다.
+   *
+   * 길이도 자르지 않는다. 사용자가 100자짜리 제목을 넣었다면 그게 맞다고 본 것이다.
+   */
+  const locked = String(fixedTitle || '').trim();
+  const title = locked || String(raw.title || topic).trim().slice(0, 100);
 
   const sections = (Array.isArray(raw.sections) ? raw.sections : [])
     .map((section) => ({
@@ -625,7 +667,9 @@ export { countChars };
  * 준수 검사에서 걸린 항목만 짚어 다시 쓰게 한다.
  * 규칙이 통과할 때까지 최대 maxRepairs 번 돈다.
  */
-async function repairUntilCompliant(post, { topic, settings, systemPrompt, signal, onProgress }) {
+async function repairUntilCompliant(post, {
+  topic, settings, systemPrompt, signal, onProgress, fixedTitle = '',
+}) {
   let current = post;
   current.compliance = checkCompliance(current, settings);
 
@@ -669,7 +713,7 @@ async function repairUntilCompliant(post, { topic, settings, systemPrompt, signa
 
     let repaired;
     try {
-      repaired = normalize(reply.data, topic, settings, current.shape);
+      repaired = normalize(reply.data, topic, settings, current.shape, fixedTitle);
     } catch (error) {
       logger.warn(`[${topic}] 보정 결과를 읽지 못했습니다: ${error.message}`);
       break;
@@ -713,13 +757,28 @@ export async function generatePost(topic, options = {}) {
   const guidelineBlock = buildGuidelineBlock(guideline);
   const exampleBlock = buildExampleBlock();
   const systemPrompt = buildSystemPrompt(guideline);
-  const { shape, count: asked, needsChunking } = detectShape(topic, settings.post.rankTargetCount);
+
+  /*
+   * 사용자가 제목을 직접 정해 준 경우.
+   *
+   * 글의 모양(항목별 / 큰 표 / 정보 정리)은 **제목을 보고** 정한다. 제목에
+   * "TOP 50" 이 들어 있으면 50줄짜리 표로 가야 하기 때문이다. 제목을 정해 줬을
+   * 때는 제목이 곧 주제이므로 topic 과 같은 값이지만, 따로 받은 값이 있으면
+   * 그쪽을 우선해서 모양을 잡는다.
+   */
+  const fixedTitle = String(options.fixedTitle || '').trim();
+  const shapeSource = fixedTitle || topic;
+  const { shape, count: asked, needsChunking } = detectShape(
+    shapeSource,
+    settings.post.rankTargetCount,
+  );
 
   logger.step(
     `[${topic}] 글 모양: ${
       { items: '항목별 상세형', table: '대형 비교표형', general: '정보 정리형' }[shape]
     }${asked ? ` (${asked}개 항목)` : ''}`,
   );
+  if (fixedTitle) logger.info(`제목 고정: "${fixedTitle}"`);
   if (guideline) logger.info(`추가 지침 적용: ${guideline.replace(/\s+/g, ' ').slice(0, 120)}`);
   if (exampleBlock) logger.info('참고 예시를 프롬프트에 함께 넣었습니다.');
   if (asked && asked > ITEM_LIMIT) {
@@ -776,7 +835,7 @@ export async function generatePost(topic, options = {}) {
   /* 2단계 — 도구를 끄고, 모아온 자료만 보고 글을 쓴다. */
   const reply = await runChatGptJson(
     buildMainPrompt(topic, settings, {
-      guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster,
+      guidelineBlock, exampleBlock, researchBlock, shape, count, asked, roster, fixedTitle,
     }),
     {
       systemPrompt,
@@ -786,7 +845,7 @@ export async function generatePost(topic, options = {}) {
     },
   );
 
-  let post = normalize(reply.data, topic, settings, shape);
+  let post = normalize(reply.data, topic, settings, shape, fixedTitle);
   post.model = reply.model || '';
   post.costUsd = (reply.costUsd || 0) + (research?.costUsd || 0);
   post.research = research;
@@ -839,7 +898,14 @@ export async function generatePost(topic, options = {}) {
     systemPrompt,
     signal: options.signal,
     onProgress: options.onCompliance,
+    fixedTitle,
   });
+
+  // 마지막 확인. 어느 경로로 왔든 정해준 제목과 다르면 안 된다.
+  if (fixedTitle && post.title !== fixedTitle) {
+    logger.warn(`[${topic}] 제목이 바뀌어 정해주신 제목으로 되돌렸습니다: "${post.title}"`);
+    post.title = fixedTitle;
+  }
 
   return post;
 }

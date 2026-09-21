@@ -126,6 +126,8 @@ async function processJob(job) {
 
   const post = await generatePost(job.topic, {
     signal: state.abort?.signal,
+    // 사용자가 제목을 직접 정해 준 주제면 그 제목을 그대로 쓰게 한다.
+    fixedTitle: job.fixedTitle || '',
     onResearch: () => {
       if (!settings.research.enabled) return;
       updateJob(job.id, { status: STATUS.RESEARCHING, message: '웹에서 최신 자료를 찾는 중...' });

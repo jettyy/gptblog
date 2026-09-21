@@ -298,7 +298,10 @@ function renderJobs() {
         : '';
       return `<tr class="${job.id === current ? 'active' : ''}">
         <td>${index + 1}</td>
-        <td class="topic"${job.why ? ` title="${escapeHtml(job.why)}"` : ''}>${escapeHtml(job.topic)}</td>
+        <td class="topic"${job.why ? ` title="${escapeHtml(job.why)}"` : ''}>${escapeHtml(job.topic)}${
+        job.fixedTitle
+          ? '<span class="check-badge pass" title="이 제목이 글자 하나도 바뀌지 않고 그대로 글 제목이 됩니다.">제목 고정</span>'
+          : ''}</td>
         <td>${scoreCell(job)}</td>
         <td><span class="badge ${job.status}">${label}</span></td>
         <td class="msg"${job.detail ? ` title="${escapeHtml(job.detail)}"` : ''}>${job.title ? `<b>${escapeHtml(job.title)}</b>` : ''}${escapeHtml(job.message || '')}
@@ -1201,6 +1204,58 @@ const setAllPicks = (checked) => {
 };
 $('btn-pick-all').onclick = () => setAllPicks(true);
 $('btn-pick-none').onclick = () => setAllPicks(false);
+
+/* ---------- 제목 직접 정해서 쓰기 ---------- */
+
+$('btn-title-toggle').onclick = () => {
+  const box = $('title-box');
+  box.classList.toggle('hidden');
+  if (!box.classList.contains('hidden')) $('titles').focus();
+};
+
+$('btn-title-close').onclick = () => $('title-box').classList.add('hidden');
+
+$('btn-title-clear').onclick = () => {
+  $('titles').value = '';
+  $('title-count').textContent = '0개 인식';
+  $('titles').focus();
+};
+
+let titlePreviewTimer = null;
+$('titles').addEventListener('input', () => {
+  clearTimeout(titlePreviewTimer);
+  titlePreviewTimer = setTimeout(async () => {
+    try {
+      const data = await api('/api/titles/preview', { method: 'POST', body: { raw: $('titles').value } });
+      $('title-count').textContent = `${data.count}개 인식`;
+    } catch {
+      // 미리 세어 보여주는 것뿐이다. 실패해도 넣는 데는 문제가 없다.
+    }
+  }, 250);
+});
+
+$('btn-title-add').onclick = async () => {
+  const raw = $('titles').value;
+  if (!raw.trim()) return toast('제목을 한 줄에 하나씩 넣어 주세요.');
+
+  const button = $('btn-title-add');
+  button.disabled = true;
+  try {
+    const data = await api('/api/titles', { method: 'POST', body: { raw } });
+    state.jobs = data.jobs;
+    renderJobs();
+    await refreshState();
+    $('titles').value = '';
+    $('title-count').textContent = '0개 인식';
+    $('title-box').classList.add('hidden');
+    toast(`제목을 정해 둔 글 ${data.added}건을 추가했습니다`
+      + `${data.skipped ? ` (중복 ${data.skipped}건 제외)` : ''}. 제목은 그대로 쓰입니다.`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 
 $('btn-manual-toggle').onclick = () => {
   const box = $('manual-box');

@@ -89,6 +89,15 @@ export function addTopics(topics, requestId = '') {
       id: shortId(),
       topic,
       requestId,
+      /*
+       * 사용자가 글 제목을 직접 정해 준 경우 그 제목.
+       *
+       * 비어 있으면 평소처럼 AI 가 주제를 보고 제목을 지어낸다.
+       * 값이 있으면 **이 제목을 글자 하나도 바꾸지 않고** 그대로 쓴다.
+       * (이때 topic 에도 같은 값이 들어간다. 제목이 곧 쓸 내용이기 때문이다)
+       */
+      fixedTitle: String(pick.fixedTitle || '').trim(),
+
       // 발굴로 들어온 주제에만 채워진다. 직접 적은 주제는 빈 값이다.
       bigTopic: pick.bigTopic || '',
       why: pick.why || '',
